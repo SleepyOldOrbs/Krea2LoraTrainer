@@ -81,6 +81,16 @@ comfy_lora_dir = "{toml_path(self.comfy)}"
         self.assertIn("--network_dim 16", train)
         self.assertIn("--blocks_to_swap 20", train)
 
+        cache_latents = (project / "config" / "cache_latents.sh").read_text(encoding="utf-8")
+        self.assertIn("krea2_cache_latents.py", cache_latents)
+        cache_text = (project / "config" / "cache_text.sh").read_text(encoding="utf-8")
+        self.assertIn("krea2_cache_text_encoder_outputs.py", cache_text)
+        copy_script = (project / "config" / "copy_latest_to_comfy.sh").read_text(encoding="utf-8")
+        self.assertIn("COMFY_LORA_DIR", copy_script)
+
+    def test_show_config_prints_resolved_settings(self) -> None:
+        self.assertEqual(self.run_cli("show-config"), 0)
+
     def test_dataset_check_and_caption_stubs(self) -> None:
         self.assertEqual(self.run_cli("init-project", "jagmoon"), 0)
         image = self.projects / "jagmoon" / "images" / "sample.png"

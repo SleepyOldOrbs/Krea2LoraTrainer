@@ -74,7 +74,10 @@ class ProjectPaths:
     config: Path
     dataset_toml: Path
     paths_env: Path
+    cache_latents_script: Path
+    cache_text_script: Path
     train_script: Path
+    copy_to_comfy_script: Path
 
 
 @dataclass
@@ -139,7 +142,10 @@ def project_paths(config: AppConfig, name: str) -> ProjectPaths:
         config=cfg,
         dataset_toml=cfg / "dataset.toml",
         paths_env=cfg / "paths.env",
+        cache_latents_script=cfg / "cache_latents.sh",
+        cache_text_script=cfg / "cache_text.sh",
         train_script=cfg / "train_krea2.sh",
+        copy_to_comfy_script=cfg / "copy_latest_to_comfy.sh",
     )
 
 
@@ -228,6 +234,52 @@ accelerate launch --num_cpu_threads_per_process 1 --mixed_precision {train["mixe
   --fp8_base \\
   --fp8_scaled \\
   --blocks_to_swap {int(train["blocks_to_swap"])}
+"""
+
+
+def cache_latents_script(project: ProjectPaths) -> str:
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+
+source "{project.paths_env}"
+source "$MUSUBI_VENV/bin/activate"
+cd "$MUSUBI_REPO"
+
+python src/musubi_tuner/krea2_cache_latents.py \\
+  --dataset_config "$PROJECT/config/dataset.toml" \\
+  --vae "$QWEN_VAE"
+"""
+
+
+def cache_text_script(config: AppConfig, project: ProjectPaths) -> str:
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+
+source "{project.paths_env}"
+source "$MUSUBI_VENV/bin/activate"
+cd "$MUSUBI_REPO"
+
+python src/musubi_tuner/krea2_cache_text_encoder_outputs.py \\
+  --dataset_config "$PROJECT/config/dataset.toml" \\
+  --text_encoder "$QWEN_TEXT_ENCODER" \\
+  --batch_size {int(config.training["text_cache_batch_size"])}
+"""
+
+
+def copy_to_comfy_script() -> str:
+    return """#!/usr/bin/env bash
+set -euo pipefail
+
+source "$(dirname "$0")/paths.env"
+mkdir -p "$COMFY_LORA_DIR"
+
+latest="$(find "$PROJECT/output" -maxdepth 1 -type f -name '*.safetensors' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+if [[ -z "${latest:-}" ]]; then
+  echo "No .safetensors LoRA output found in $PROJECT/output" >&2
+  exit 1
+fi
+
+cp -v "$latest" "$COMFY_LORA_DIR/"
 """
 
 
@@ -492,12 +544,40 @@ def create_project(args: argparse.Namespace) -> int:
     wrote = [
         (project.dataset_toml, write_text(project.dataset_toml, dataset_toml(config, project), args.force)),
         (project.paths_env, write_text(project.paths_env, paths_env(config, project), args.force)),
+        (
+            project.cache_latents_script,
+            write_text(project.cache_latents_script, cache_latents_script(project), args.force, executable=True),
+        ),
+        (
+            project.cache_text_script,
+            write_text(project.cache_text_script, cache_text_script(config, project), args.force, executable=True),
+        ),
         (project.train_script, write_text(project.train_script, train_script(config, project), args.force, executable=True)),
+        (
+            project.copy_to_comfy_script,
+            write_text(project.copy_to_comfy_script, copy_to_comfy_script(), args.force, executable=True),
+        ),
     ]
     print(f"Project: {project.root}")
     for path, changed in wrote:
         action = "wrote" if changed else "kept"
         print(f"{action}: {path}")
+    return 0
+
+
+def show_config(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    print("[paths]")
+    for key, value in config.paths.items():
+        print(f"{key} = {value}")
+    print()
+    print("[dataset]")
+    for key, value in config.dataset.items():
+        print(f"{key} = {value}")
+    print()
+    print("[training]")
+    for key, value in config.training.items():
+        print(f"{key} = {value}")
     return 0
 
 
@@ -634,6 +714,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to config.toml. Defaults to ./config.toml when present, otherwise built-in defaults.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    show = sub.add_parser("show-config", help="Print resolved config values.")
+    show.set_defaults(func=show_config)
 
     init = sub.add_parser("init-project", help="Create project folders and generated config files.")
     init.add_argument("project_name")

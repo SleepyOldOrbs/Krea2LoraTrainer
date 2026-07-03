@@ -30,6 +30,12 @@ Then validate the local paths:
 python krea2_lora.py validate-env
 ```
 
+From Windows PowerShell, use the WSL wrapper so `~/...` resolves inside Ubuntu:
+
+```powershell
+.\scripts\run-in-wsl.ps1 validate-env
+```
+
 If the ComfyUI LoRA destination is missing and its parent is writable:
 
 ```bash
@@ -54,7 +60,10 @@ This creates:
   config/
     dataset.toml
     paths.env
+    cache_latents.sh
+    cache_text.sh
     train_krea2.sh
+    copy_latest_to_comfy.sh
 ```
 
 Place training images in `~/krea2_loras/jagmoon/images/`. Each image needs a matching `.txt` caption with the same basename.
@@ -96,6 +105,7 @@ python krea2_lora.py status jagmoon
 
 ## Commands
 
+- `show-config`: print resolved path, dataset, and training settings
 - `init-project PROJECT_NAME`: create project folders, `dataset.toml`, `paths.env`, and `train_krea2.sh`
 - `validate-env`: check musubi, venvs, required model files, project root, and ComfyUI destination
 - `check-dataset PROJECT_NAME`: ensure images exist and every image has a non-empty matching caption
