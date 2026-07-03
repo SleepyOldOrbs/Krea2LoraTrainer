@@ -28,3 +28,11 @@ mixed_precision = "bf16"
 optimizer_type = "adamw8bit"
 discrete_flow_shift = "2.5"
 text_cache_batch_size = 1
+
+[downloads]
+krea_raw_repo = "krea/Krea-2-Raw"
+krea_raw_file = "raw.safetensors"
+qwen_vae_repo = "Comfy-Org/Qwen-Image-Edit_ComfyUI"
+qwen_vae_file = "split_files/vae/qwen_image_vae.safetensors"
+qwen_text_encoder_repo = "Comfy-Org/Qwen3-VL"
+qwen_text_encoder_file = "text_encoders/qwen3vl_4b_bf16.safetensors"

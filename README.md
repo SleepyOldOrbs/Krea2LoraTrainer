@@ -30,6 +30,12 @@ Then validate the local paths:
 python krea2_lora.py validate-env
 ```
 
+If model files are missing, download the configured Hugging Face files:
+
+```bash
+python krea2_lora.py download-models
+```
+
 From Windows PowerShell, use the WSL wrapper so `~/...` resolves inside Ubuntu:
 
 ```powershell
@@ -113,6 +119,7 @@ python krea2_lora.py status jagmoon
 ## Commands
 
 - `show-config`: print resolved path, dataset, and training settings
+- `download-models`: download or verify the configured Hugging Face model files
 - `init-project PROJECT_NAME`: create project folders, `dataset.toml`, `paths.env`, and `train_krea2.sh`
 - `validate-env`: check musubi, venvs, required model files, project root, and ComfyUI destination
 - `check-dataset PROJECT_NAME`: ensure images exist and every image has a non-empty matching caption
@@ -132,6 +139,8 @@ The cache and train commands print the exact shell script before execution. Use 
 Do not put model files, datasets, caches, outputs, or LoRA weights inside this repo. The `.gitignore` excludes common model, dataset, cache, output, venv, and log paths, but keep large files in the configured external folders.
 
 This helper does not support cloud training and does not train on Krea 2 Turbo. It uses the RAW model path for training and leaves Turbo use to ComfyUI inference.
+
+`download-models` skips existing non-empty target files unless `--force` is supplied. Keep the configured destinations outside this repo.
 
 ## Musubi reference
 

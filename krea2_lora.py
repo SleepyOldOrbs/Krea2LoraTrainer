@@ -56,6 +56,14 @@ DEFAULT_CONFIG: dict[str, dict[str, Any]] = {
         "discrete_flow_shift": "2.5",
         "text_cache_batch_size": 1,
     },
+    "downloads": {
+        "krea_raw_repo": "krea/Krea-2-Raw",
+        "krea_raw_file": "raw.safetensors",
+        "qwen_vae_repo": "Comfy-Org/Qwen-Image-Edit_ComfyUI",
+        "qwen_vae_file": "split_files/vae/qwen_image_vae.safetensors",
+        "qwen_text_encoder_repo": "Comfy-Org/Qwen3-VL",
+        "qwen_text_encoder_file": "text_encoders/qwen3vl_4b_bf16.safetensors",
+    },
 }
 
 
@@ -64,6 +72,7 @@ class AppConfig:
     paths: dict[str, Path]
     dataset: dict[str, Any]
     training: dict[str, Any]
+    downloads: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -128,7 +137,7 @@ def load_config(path: Path | None) -> AppConfig:
 
     merged = deep_merge(DEFAULT_CONFIG, loaded)
     paths = {name: expand_path(value) for name, value in merged["paths"].items()}
-    return AppConfig(paths=paths, dataset=merged["dataset"], training=merged["training"])
+    return AppConfig(paths=paths, dataset=merged["dataset"], training=merged["training"], downloads=merged["downloads"])
 
 
 def validate_project_name(name: str) -> str:
@@ -168,6 +177,42 @@ def quote(value: str | os.PathLike[str]) -> str:
 def output_name(config: AppConfig, project: ProjectPaths) -> str:
     template = str(config.training["output_name_template"])
     return template.format(project=project.name)
+
+
+def local_dir_for_hf_file(target: Path, hf_file: str) -> Path:
+    parts = Path(hf_file).parts
+    if len(parts) > len(target.parts):
+        raise ValueError(f"Cannot derive local dir for {target} from {hf_file}")
+    suffix = tuple(str(part) for part in target.parts[-len(parts) :])
+    if suffix != parts:
+        return target.parent
+    local_dir = target
+    for _ in parts:
+        local_dir = local_dir.parent
+    return local_dir
+
+
+def model_specs(config: AppConfig) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "krea_raw",
+            "repo": str(config.downloads["krea_raw_repo"]),
+            "file": str(config.downloads["krea_raw_file"]),
+            "target": config.paths["krea_raw"],
+        },
+        {
+            "name": "qwen_vae",
+            "repo": str(config.downloads["qwen_vae_repo"]),
+            "file": str(config.downloads["qwen_vae_file"]),
+            "target": config.paths["qwen_vae"],
+        },
+        {
+            "name": "qwen_text_encoder",
+            "repo": str(config.downloads["qwen_text_encoder_repo"]),
+            "file": str(config.downloads["qwen_text_encoder_file"]),
+            "target": config.paths["qwen_text_encoder"],
+        },
+    ]
 
 
 def dataset_toml(config: AppConfig, project: ProjectPaths) -> str:
@@ -644,6 +689,10 @@ def show_config(args: argparse.Namespace) -> int:
     print("[training]")
     for key, value in config.training.items():
         print(f"{key} = {value}")
+    print()
+    print("[downloads]")
+    for key, value in config.downloads.items():
+        print(f"{key} = {value}")
     return 0
 
 
@@ -652,6 +701,58 @@ def validate_env(args: argparse.Namespace) -> int:
     if args.create_comfy_dir:
         config.paths["comfy_lora_dir"].mkdir(parents=True, exist_ok=True)
     return print_checks(env_checks(config))
+
+
+def download_models(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    specs = model_specs(config)
+    if args.model != "all":
+        specs = [spec for spec in specs if spec["name"] == args.model]
+
+    rc = 0
+    for spec in specs:
+        target = Path(spec["target"])
+        exists = target.is_file() and target.stat().st_size > 0
+        size_mb = round(target.stat().st_size / 1024 / 1024, 2) if exists else 0
+        label = str(spec["name"])
+        if exists and not args.force:
+            print(f"[ok] {label}: {target} ({size_mb} MB), skipping existing file")
+            continue
+        if args.verify_only:
+            print(f"[missing] {label}: {target}")
+            rc = 1
+            continue
+        if shutil.which("huggingface-cli") is None:
+            print(
+                "error: huggingface-cli was not found on PATH. Install huggingface_hub in the active environment.",
+                file=sys.stderr,
+            )
+            return 2
+
+        local_dir = local_dir_for_hf_file(target, str(spec["file"]))
+        local_dir.mkdir(parents=True, exist_ok=True)
+        command = [
+            "huggingface-cli",
+            "download",
+            str(spec["repo"]),
+            str(spec["file"]),
+            "--local-dir",
+            str(local_dir),
+        ]
+        print("Download command:")
+        print(" ".join(quote(part) for part in command))
+        if args.dry_run:
+            print("Dry run: model was not downloaded.")
+            continue
+        completed = subprocess.run(command, check=False)
+        if completed.returncode:
+            rc = completed.returncode
+        elif target.is_file():
+            print(f"[ok] {label}: {target} ({round(target.stat().st_size / 1024 / 1024, 2)} MB)")
+        else:
+            print(f"[error] {label}: download command finished, but expected file is missing: {target}")
+            rc = 1
+    return rc
 
 
 def check_dataset(args: argparse.Namespace) -> int:
@@ -839,6 +940,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     show = sub.add_parser("show-config", help="Print resolved config values.")
     show.set_defaults(func=show_config)
+
+    downloads = sub.add_parser("download-models", help="Download or verify required Hugging Face model files.")
+    downloads.add_argument("--model", choices=["all", "krea_raw", "qwen_vae", "qwen_text_encoder"], default="all")
+    downloads.add_argument("--force", action="store_true", help="Download even when the target file already exists.")
+    downloads.add_argument("--dry-run", action="store_true", help="Print download commands without running them.")
+    downloads.add_argument("--verify-only", action="store_true", help="Only verify local files; do not call Hugging Face.")
+    downloads.set_defaults(func=download_models)
 
     init = sub.add_parser("init-project", help="Create project folders and generated config files.")
     init.add_argument("project_name")

@@ -136,6 +136,25 @@ comfy_lora_dir = "{toml_path(self.comfy)}"
     def test_validate_env_accepts_fake_local_layout(self) -> None:
         self.assertEqual(self.run_cli("validate-env", "--create-comfy-dir"), 0)
 
+    def test_download_models_verify_only_uses_existing_files(self) -> None:
+        self.assertEqual(self.run_cli("download-models", "--verify-only"), 0)
+
+    def test_download_models_skips_existing_without_hf_cli(self) -> None:
+        with mock.patch.object(krea2_lora.shutil, "which", return_value=None):
+            self.assertEqual(self.run_cli("download-models"), 0)
+
+    def test_download_models_dry_run_for_missing_file(self) -> None:
+        self.krea_raw.unlink()
+        with mock.patch.object(krea2_lora.shutil, "which", return_value="/usr/bin/huggingface-cli"):
+            self.assertEqual(self.run_cli("download-models", "--model", "krea_raw", "--dry-run"), 0)
+
+    def test_local_dir_for_nested_hf_file(self) -> None:
+        target = self.models / "qwen" / "split_files" / "vae" / "qwen_image_vae.safetensors"
+        self.assertEqual(
+            krea2_lora.local_dir_for_hf_file(target, "split_files/vae/qwen_image_vae.safetensors"),
+            self.models / "qwen",
+        )
+
     def test_project_name_rejects_paths(self) -> None:
         with self.assertRaises(ValueError):
             krea2_lora.validate_project_name("../bad")
