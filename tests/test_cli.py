@@ -166,16 +166,40 @@ comfy_lora_dir = "{toml_path(self.comfy)}"
         self.assertEqual(self.run_cli("validate-env", "--create-comfy-dir"), 0)
 
     def test_download_models_verify_only_uses_existing_files(self) -> None:
-        self.assertEqual(self.run_cli("download-models", "--verify-only"), 0)
+        self.assertEqual(self.run_cli("download-models", "--model", "krea_raw", "--verify-only"), 0)
 
     def test_download_models_skips_existing_without_hf_cli(self) -> None:
         with mock.patch.object(krea2_lora.shutil, "which", return_value=None):
-            self.assertEqual(self.run_cli("download-models"), 0)
+            self.assertEqual(self.run_cli("download-models", "--model", "krea_raw"), 0)
 
     def test_download_models_dry_run_for_missing_file(self) -> None:
         self.krea_raw.unlink()
         with mock.patch.object(krea2_lora.shutil, "which", return_value="/usr/bin/huggingface-cli"):
             self.assertEqual(self.run_cli("download-models", "--model", "krea_raw", "--dry-run"), 0)
+
+    def test_download_models_dry_run_includes_vl_caption_model(self) -> None:
+        self.assertEqual(self.run_cli("download-models", "--model", "vl_caption", "--dry-run"), 0)
+
+    def test_download_vl_caption_model_invokes_captioning_venv(self) -> None:
+        def fake_run(command, text=None, capture_output=None, check=None):
+            self.assertEqual(command[0], str(self.caption_venv / "bin" / "python"))
+            self.assertIn("--model", command)
+            self.assertIn("example/vl-model", command)
+            self.assertIn("--local-files-only", command)
+            return subprocess.CompletedProcess(command, 0, "[ok] vl_caption: example/vl-model\n", "")
+
+        with mock.patch.object(krea2_lora.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(
+                self.run_cli(
+                    "download-models",
+                    "--model",
+                    "vl_caption",
+                    "--caption-model",
+                    "example/vl-model",
+                    "--verify-only",
+                ),
+                0,
+            )
 
     def test_local_dir_for_nested_hf_file(self) -> None:
         target = self.models / "qwen" / "split_files" / "vae" / "qwen_image_vae.safetensors"

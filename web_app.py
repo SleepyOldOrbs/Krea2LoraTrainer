@@ -51,6 +51,9 @@ def build_cli_args(payload: dict[str, object], config: Path | None = None) -> li
             args.append("--create-comfy-dir")
     elif action == "download-models":
         args.append("download-models")
+        caption_model = text_value(payload, "caption_model")
+        if caption_model:
+            args.extend(["--caption-model", caption_model])
     elif action == "init-project":
         require_project(project)
         args.extend(["init-project", project])

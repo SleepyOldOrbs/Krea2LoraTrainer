@@ -13,7 +13,7 @@ const MODE_HELP = {
 };
 const ACTION_TITLES = {
   "validate-env": "Validate Environment",
-  "download-models": "Verify Models",
+  "download-models": "Download Missing Models",
   "init-project": "Init Project",
   "import-images": "Import Images",
   "generate-captions": "Generate VL Captions",
@@ -233,7 +233,7 @@ function summarizeResult(action, result) {
   if (!ok) {
     const failures = {
       "validate-env": "Environment check found issues. Review the run log for missing paths or models.",
-      "download-models": "Model verification found a problem. Review the run log for missing files.",
+      "download-models": "Model download found a problem. Review the run log for missing files, Hugging Face access, or captioning venv setup.",
       "init-project": "Project setup did not complete. Review the run log before continuing.",
       "import-images": "Image import did not complete. Check the source image location and import mode.",
       "generate-captions": "VL caption generation did not complete. Check the captioning venv, model, and log.",
@@ -250,7 +250,7 @@ function summarizeResult(action, result) {
 
   const successes = {
     "validate-env": "Environment is OK.",
-    "download-models": "Model check completed successfully.",
+    "download-models": "Required models are present or were downloaded successfully.",
     "init-project": "Project folders and config are ready.",
     "import-images": "Source images have been imported into the project.",
     "dataset-report": "Dataset report completed. Use the counts below to decide the next step.",

@@ -24,6 +24,15 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("train", args)
         self.assertNotIn("--dry-run", args)
 
+    def test_download_models_passes_caption_model(self) -> None:
+        args = web_app.build_cli_args(
+            {
+                "action": "download-models",
+                "caption_model": "Salesforce/blip-image-captioning-base",
+            }
+        )
+        self.assertEqual(args[-3:], ["download-models", "--caption-model", "Salesforce/blip-image-captioning-base"])
+
     def test_import_images_args_are_whitelisted(self) -> None:
         args = web_app.build_cli_args(
             {

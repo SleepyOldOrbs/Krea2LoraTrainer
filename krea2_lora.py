@@ -115,6 +115,47 @@ def main():
 if __name__ == "__main__":
     raise SystemExit(main())
 """
+HF_MODEL_DOWNLOAD_SCRIPT = r"""
+import argparse
+import sys
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Download or verify a Hugging Face model repository.")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--local-files-only", action="store_true")
+    parser.add_argument("--force", action="store_true")
+    args = parser.parse_args()
+
+    try:
+        from huggingface_hub import snapshot_download
+    except Exception as exc:
+        print(
+            "error: captioning venv needs huggingface_hub installed before VL model download can run: "
+            f"{exc}",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        cache_path = snapshot_download(
+            repo_id=args.model,
+            local_files_only=args.local_files_only,
+            force_download=args.force and not args.local_files_only,
+        )
+    except Exception as exc:
+        mode = "verify local cache" if args.local_files_only else "download"
+        print(f"error: could not {mode} model {args.model!r}: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"[ok] vl_caption: {args.model}")
+    print(f"cache: {cache_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
 
 DEFAULT_CONFIG: dict[str, dict[str, Any]] = {
     "paths": {
@@ -814,8 +855,11 @@ def validate_env(args: argparse.Namespace) -> int:
 def download_models(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     specs = model_specs(config)
-    if args.model != "all":
+    include_vl_caption = args.model in {"all", "vl_caption"}
+    if args.model not in {"all", "vl_caption"}:
         specs = [spec for spec in specs if spec["name"] == args.model]
+    elif args.model == "vl_caption":
+        specs = []
 
     rc = 0
     for spec in specs:
@@ -860,7 +904,55 @@ def download_models(args: argparse.Namespace) -> int:
         else:
             print(f"[error] {label}: download command finished, but expected file is missing: {target}")
             rc = 1
+    if include_vl_caption:
+        vl_rc = download_vl_caption_model(config, args)
+        if vl_rc:
+            rc = vl_rc
     return rc
+
+
+def download_vl_caption_model(config: AppConfig, args: argparse.Namespace) -> int:
+    model = args.caption_model or str(config.captioning["model"])
+    python_bin = captioning_python(config)
+    command = [
+        str(python_bin),
+        "-c",
+        HF_MODEL_DOWNLOAD_SCRIPT,
+        "--model",
+        model,
+    ]
+    if args.verify_only:
+        command.append("--local-files-only")
+    if args.force:
+        command.append("--force")
+
+    print(f"VL caption model: {model}")
+    print("Download command:")
+    display_command = [
+        str(python_bin),
+        "-c",
+        "<hf model download helper>",
+        "--model",
+        model,
+    ]
+    if args.verify_only:
+        display_command.append("--local-files-only")
+    if args.force:
+        display_command.append("--force")
+    print(" ".join(quote(part) for part in display_command))
+    if args.dry_run:
+        print("Dry run: VL caption model was not downloaded.")
+        return 0
+    if not python_bin.is_file():
+        print(f"Captioning venv python not found: {python_bin}")
+        return 1
+
+    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+    if completed.stdout:
+        print(completed.stdout, end="")
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
+    return completed.returncode
 
 
 def check_dataset(args: argparse.Namespace) -> int:
@@ -1241,7 +1333,12 @@ def build_parser() -> argparse.ArgumentParser:
     show.set_defaults(func=show_config)
 
     downloads = sub.add_parser("download-models", help="Download or verify required Hugging Face model files.")
-    downloads.add_argument("--model", choices=["all", "krea_raw", "qwen_vae", "qwen_text_encoder"], default="all")
+    downloads.add_argument(
+        "--model",
+        choices=["all", "krea_raw", "qwen_vae", "qwen_text_encoder", "vl_caption"],
+        default="all",
+    )
+    downloads.add_argument("--caption-model", help="VL caption Hugging Face model. Defaults to config.captioning.model.")
     downloads.add_argument("--force", action="store_true", help="Download even when the target file already exists.")
     downloads.add_argument("--dry-run", action="store_true", help="Print download commands without running them.")
     downloads.add_argument("--verify-only", action="store_true", help="Only verify local files; do not call Hugging Face.")

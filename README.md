@@ -1,6 +1,6 @@
 # Krea2 LoRA Trainer Helper
 
-A small local CLI for repeatable Krea 2 LoRA training projects. It wraps an existing `musubi-tuner` checkout and your local model files; it does not download, bundle, or commit models.
+A small local CLI for repeatable Krea 2 LoRA training projects. It wraps an existing `musubi-tuner` checkout and your local model files. When requested, it can download models to configured external locations or the Hugging Face cache; it does not bundle or commit models.
 
 The intended workflow is RAW training with Krea 2 RAW, then using the resulting LoRA in ComfyUI with Krea 2 Turbo.
 
@@ -30,10 +30,19 @@ Then validate the local paths:
 python krea2_lora.py validate-env
 ```
 
-If model files are missing, download the configured Hugging Face files:
+If model files are missing, download the configured Hugging Face files and the VL caption model:
 
 ```bash
 python krea2_lora.py download-models
+```
+
+You can also target one model:
+
+```bash
+python krea2_lora.py download-models --model krea_raw
+python krea2_lora.py download-models --model qwen_vae
+python krea2_lora.py download-models --model qwen_text_encoder
+python krea2_lora.py download-models --model vl_caption
 ```
 
 From Windows PowerShell, use the WSL wrapper so `~/...` resolves inside Ubuntu:
@@ -156,7 +165,7 @@ Then open:
 http://127.0.0.1:8765/
 ```
 
-The web app is a local-only operational dashboard for the same helper commands. It can validate the environment, verify models, initialize projects, import images, generate VL captions, show dataset reports, dry-run cache/train commands, run cache steps, and copy the latest LoRA to ComfyUI. The training action is guarded by the backend and defaults to `--dry-run`.
+The web app is a local-only operational dashboard for the same helper commands. It can validate the environment, download missing models, initialize projects, import images, generate VL captions, show dataset reports, dry-run cache/train commands, run cache steps, and copy the latest LoRA to ComfyUI. The training action is guarded by the backend and defaults to `--dry-run`.
 
 The Project Control header includes a `Clear Project` button. It clears the form fields and local workflow ticks only; it does not delete project files.
 
@@ -165,7 +174,7 @@ The Run Log includes a summary box above the raw command output with a plain-lan
 ## Commands
 
 - `show-config`: print resolved path, dataset, and training settings
-- `download-models`: download or verify the configured Hugging Face model files
+- `download-models`: download or verify the configured Hugging Face model files and VL caption model
 - `init-project PROJECT_NAME`: create project folders, `dataset.toml`, `paths.env`, and `train_krea2.sh`
 - `validate-env`: check musubi, venvs, required model files, project root, and ComfyUI destination
 - `check-dataset PROJECT_NAME`: ensure images exist and every image has a non-empty matching caption
@@ -188,9 +197,17 @@ Do not put model files, datasets, caches, outputs, or LoRA weights inside this r
 
 This helper does not support cloud training and does not train on Krea 2 Turbo. It uses the RAW model path for training and leaves Turbo use to ComfyUI inference.
 
-`download-models` skips existing non-empty target files unless `--force` is supplied. Keep the configured destinations outside this repo.
+`download-models` skips existing non-empty Krea/Qwen target files unless `--force` is supplied. The VL caption model is downloaded to the normal Hugging Face cache through the configured captioning venv. Keep all configured destinations outside this repo.
 
 VL caption generation writes `.txt` sidecars next to project images. It does not store model files in this repo. Keep `captioning.local_files_only = true` or pass `--local-files-only` when you want to prevent Hugging Face downloads during captioning.
+
+## WSL versus native Windows
+
+This project defaults to WSL because the proven manual Krea 2 workflow used WSL2 Ubuntu paths, Linux virtual environments, Bash scripts, and musubi-tuner commands. The helper mirrors that known-good setup instead of introducing a second runtime surface.
+
+The web app itself does not require WSL in principle. It is a Python HTTP server plus static HTML. The training backend currently assumes Linux-style paths, `venv/bin/activate`, `/mnt/c/...` Windows mounts, and `bash -lc` execution for cache/train commands.
+
+Native Windows support is possible, but it would need explicit Windows command generation, `venv\\Scripts\\activate` handling, Windows path defaults, and validation against a Windows CUDA/PyTorch/musubi install. Until that is implemented and tested, WSL is the supported runtime.
 
 ## Musubi reference
 
