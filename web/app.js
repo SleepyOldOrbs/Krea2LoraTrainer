@@ -4,6 +4,11 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+const MODE_HELP = {
+  symlink: "Symlink references the originals without duplicating large images.",
+  copy: "Copy duplicates images into the project; safest if the source folder may move.",
+  hardlink: "Hardlink avoids duplicate storage but only works on the same filesystem.",
+};
 
 function values() {
   return {
@@ -26,6 +31,30 @@ function setBusy(next) {
   document.querySelectorAll("button[data-action]").forEach((button) => {
     button.disabled = next;
   });
+}
+
+function completionKey(action) {
+  const project = values().project || "no-project";
+  return `krea2.workflow.${project}.${action}`;
+}
+
+function restoreCompletedActions() {
+  document.querySelectorAll("button[data-action]").forEach((button) => {
+    const done = localStorage.getItem(completionKey(button.dataset.action)) === "1";
+    button.classList.toggle("complete", done);
+    button.setAttribute("aria-label", done ? `${button.innerText} completed` : button.innerText);
+  });
+}
+
+function markActionComplete(action, complete) {
+  const key = completionKey(action);
+  if (complete) {
+    localStorage.setItem(key, "1");
+  } else {
+    localStorage.removeItem(key);
+  }
+  const button = document.querySelector(`button[data-action="${CSS.escape(action)}"]`);
+  if (button) button.classList.toggle("complete", complete);
 }
 
 async function getJSON(url) {
@@ -59,6 +88,7 @@ function renderConfig(config) {
     projectInput.value = config.projects[0];
   }
   renderStatus(config.checks);
+  restoreCompletedActions();
 }
 
 function renderStatus(checks) {
@@ -139,13 +169,46 @@ async function runAction(action) {
     const result = await postJSON("/api/run", payload);
     const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
     appendLog(`${output || "(no output)"}\nexit ${result.returncode}`);
+    markActionComplete(action, result.returncode === 0);
     await refreshConfig();
     await refreshReport();
   } catch (error) {
+    markActionComplete(action, false);
     appendLog(`error: ${error.message}`);
   } finally {
     setBusy(false);
   }
+}
+
+async function pickSourceFolder() {
+  const status = $("sourcePickerStatus");
+  if ("showDirectoryPicker" in window) {
+    try {
+      const handle = await window.showDirectoryPicker();
+      status.textContent = `Selected folder "${handle.name}". Browser security hides the absolute path, so keep the WSL path above accurate.`;
+      return;
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        status.textContent = `Folder picker failed: ${error.message}`;
+      }
+      return;
+    }
+  }
+  $("sourcePicker").click();
+}
+
+function handleSourcePickerChange(event) {
+  const files = Array.from(event.target.files || []);
+  const first = files[0]?.webkitRelativePath || files[0]?.name || "";
+  const folder = first.includes("/") ? first.split("/")[0] : "selected folder";
+  $("sourcePickerStatus").textContent =
+    files.length > 0
+      ? `Selected ${files.length} files from "${folder}". Browser security hides the absolute path, so keep the WSL path above accurate.`
+      : "Use the WSL path the server can read, for example /mnt/c/Temp/JAG.";
+}
+
+function updateModeHelp() {
+  $("modeHelp").textContent = MODE_HELP[$("mode").value] || MODE_HELP.symlink;
 }
 
 function bind() {
@@ -156,6 +219,10 @@ function bind() {
     $("consoleLog").textContent = "Ready.";
   });
   $("projectName").addEventListener("change", refreshReport);
+  $("projectName").addEventListener("change", restoreCompletedActions);
+  $("pickSourceDir").addEventListener("click", pickSourceFolder);
+  $("sourcePicker").addEventListener("change", handleSourcePickerChange);
+  $("mode").addEventListener("change", updateModeHelp);
 }
 
 async function init() {
@@ -163,6 +230,7 @@ async function init() {
   try {
     await refreshConfig();
     await refreshReport();
+    updateModeHelp();
   } catch (error) {
     appendLog(`Startup check failed: ${error.message}`);
   }

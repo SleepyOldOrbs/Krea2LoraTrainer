@@ -36,16 +36,21 @@
 
         <section class="panel controls" id="setup">
           <div class="field">
-            <label for="projectName">Project</label>
+            <label for="projectName">Project Name</label>
             <input id="projectName" list="projectList" placeholder="jagmoon" autocomplete="off">
             <datalist id="projectList"></datalist>
           </div>
           <div class="field wide">
-            <label for="sourceDir">Source images</label>
-            <input id="sourceDir" value="/mnt/c/Temp/JAG" autocomplete="off">
+            <label for="sourceDir">Source image location</label>
+            <div class="input-row">
+              <input id="sourceDir" value="/mnt/c/Temp/JAG" autocomplete="off">
+              <button id="pickSourceDir" class="inline-button" type="button">Pick Folder</button>
+              <input id="sourcePicker" type="file" webkitdirectory directory multiple hidden>
+            </div>
+            <p class="field-help" id="sourcePickerStatus">Use the WSL path the server can read, for example /mnt/c/Temp/JAG.</p>
           </div>
           <div class="field">
-            <label for="trigger">Trigger</label>
+            <label for="trigger">Trigger Word</label>
             <input id="trigger" value="jagmoon style" autocomplete="off">
           </div>
           <div class="field">
@@ -55,6 +60,7 @@
               <option value="copy">Copy</option>
               <option value="hardlink">Hardlink</option>
             </select>
+            <p class="field-help" id="modeHelp">Symlink references the originals without duplicating large images.</p>
           </div>
         </section>
 
@@ -65,17 +71,61 @@
               <h3>Workflow</h3>
             </div>
             <div class="action-list">
-              <button data-action="validate-env">Validate Environment</button>
-              <button data-action="download-models">Verify Models</button>
-              <button data-action="init-project">Init Project</button>
-              <button data-action="import-images">Import Images</button>
-              <button data-action="dataset-report">Dataset Report</button>
-              <button data-action="cache-latents-dry">Dry Run Latents</button>
-              <button data-action="cache-text-dry">Dry Run Text Cache</button>
-              <button data-action="train-dry" class="primary">Train Dry Run</button>
-              <button data-action="cache-latents">Run Latent Cache</button>
-              <button data-action="cache-text">Run Text Cache</button>
-              <button data-action="copy-to-comfy">Copy To ComfyUI</button>
+              <button class="workflow-button" data-action="validate-env">
+                <span class="step-number">1</span>
+                <span class="button-copy"><span class="button-title">Validate Environment</span><span class="button-note">Check WSL, musubi, venvs, models, and ComfyUI path.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
+              <button class="workflow-button" data-action="download-models">
+                <span class="step-number">2</span>
+                <span class="button-copy"><span class="button-title">Verify Models</span><span class="button-note">Confirm required Hugging Face model files exist locally.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
+              <button class="workflow-button" data-action="init-project">
+                <span class="step-number">3</span>
+                <span class="button-copy"><span class="button-title">Init Project</span><span class="button-note">Create images, cache, output, config, and scripts.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
+              <button class="workflow-button" data-action="import-images">
+                <span class="step-number">4</span>
+                <span class="button-copy"><span class="button-title">Import Images</span><span class="button-note">Copy, symlink, or hardlink source images into the project.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
+              <button class="workflow-button" data-action="dataset-report">
+                <span class="step-number">5</span>
+                <span class="button-copy"><span class="button-title">Dataset Report</span><span class="button-note">Check image count, captions, cache files, and outputs.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
+              <button class="workflow-button" data-action="cache-latents-dry">
+                <span class="step-number">6</span>
+                <span class="button-copy"><span class="button-title">Dry Run Latents</span><span class="button-note">Preview the VAE latent-cache command without running it.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
+              <button class="workflow-button" data-action="cache-text-dry">
+                <span class="step-number">7</span>
+                <span class="button-copy"><span class="button-title">Dry Run Text Cache</span><span class="button-note">Preview the Qwen text-cache command without running it.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
+              <button class="workflow-button primary" data-action="train-dry">
+                <span class="step-number">8</span>
+                <span class="button-copy"><span class="button-title">Train Dry Run</span><span class="button-note">Print the full training command. This does not train.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
+              <button class="workflow-button" data-action="cache-latents">
+                <span class="step-number">9</span>
+                <span class="button-copy"><span class="button-title">Run Latent Cache</span><span class="button-note">Encode image latents into the project cache folder.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
+              <button class="workflow-button" data-action="cache-text">
+                <span class="step-number">10</span>
+                <span class="button-copy"><span class="button-title">Run Text Cache</span><span class="button-note">Encode captions with the Qwen text encoder.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
+              <button class="workflow-button" data-action="copy-to-comfy">
+                <span class="step-number">11</span>
+                <span class="button-copy"><span class="button-title">Copy To ComfyUI</span><span class="button-note">Copy the newest LoRA output to the ComfyUI folder.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
             </div>
           </div>
 
