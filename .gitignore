@@ -1,0 +1,37 @@
+# Local config and environment
+config.toml
+.env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Models and weights
+models/
+**/models/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+
+# Training data, caches, and outputs
+datasets/images/
+images/
+cache/
+caches/
+output/
+outputs/
+logs/
+*.log
+*.cache
+*.npz
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

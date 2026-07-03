@@ -1,0 +1,30 @@
+[paths]
+musubi_repo = "~/src/musubi-tuner"
+musubi_venv = "~/.venvs/musubi-krea2"
+captioning_venv = "~/.venvs/vl-caption"
+projects_root = "~/krea2_loras"
+krea_raw = "~/ai_models/krea2/raw.safetensors"
+qwen_vae = "~/ai_models/qwen/split_files/vae/qwen_image_vae.safetensors"
+qwen_text_encoder = "~/ai_models/qwen/text_encoders/qwen3vl_4b_bf16.safetensors"
+comfy_lora_dir = "/mnt/c/ComfyUI_windows_portable/ComfyUI/models/loras/krea2-jim"
+
+[dataset]
+resolution = [768, 768]
+batch_size = 1
+enable_bucket = true
+caption_extension = ".txt"
+
+[training]
+output_name_template = "{project}_krea2_lora"
+network_dim = 16
+network_alpha = 16
+max_train_epochs = 20
+save_every_n_epochs = 2
+learning_rate = "1e-4"
+seed = 42
+max_data_loader_n_workers = 2
+blocks_to_swap = 20
+mixed_precision = "bf16"
+optimizer_type = "adamw8bit"
+discrete_flow_shift = "2.5"
+text_cache_batch_size = 1
