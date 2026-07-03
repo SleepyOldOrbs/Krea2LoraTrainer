@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import subprocess
 import sys
 import webbrowser
@@ -168,6 +169,74 @@ def dataset_review_items(project: krea2_lora.ProjectPaths) -> list[dict[str, obj
     return items
 
 
+def hf_model_cache_dir(model_id: str) -> Path:
+    root = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    return root / "hub" / f"models--{model_id.replace('/', '--')}"
+
+
+def hf_model_is_cached(model_id: str) -> bool:
+    cache_dir = hf_model_cache_dir(model_id)
+    snapshots = cache_dir / "snapshots"
+    return snapshots.is_dir() and any(snapshots.iterdir())
+
+
+def model_inventory(config: krea2_lora.AppConfig) -> list[dict[str, object]]:
+    models: list[dict[str, object]] = []
+    for spec in krea2_lora.model_specs(config):
+        target = Path(spec["target"])
+        models.append(
+            {
+                "name": spec["name"],
+                "label": {
+                    "krea_raw": "Krea RAW",
+                    "qwen_vae": "Qwen VAE",
+                    "qwen_text_encoder": "Qwen text encoder",
+                }.get(str(spec["name"]), str(spec["name"])),
+                "repo": spec["repo"],
+                "file": spec["file"],
+                "path": str(target),
+                "status": "installed" if target.is_file() else "missing",
+                "size_bytes": target.stat().st_size if target.is_file() else None,
+                "download_action": "download-models",
+            }
+        )
+
+    caption_model = str(config.captioning["model"])
+    cache_dir = hf_model_cache_dir(caption_model)
+    models.append(
+        {
+            "name": "vl_caption",
+            "label": "VL caption model",
+            "repo": caption_model,
+            "file": "Hugging Face snapshot cache",
+            "path": str(cache_dir),
+            "status": "installed" if hf_model_is_cached(caption_model) else "missing",
+            "size_bytes": None,
+            "download_action": "download-models",
+        }
+    )
+    return models
+
+
+def runtime_payload() -> dict[str, object]:
+    proc_version = Path("/proc/version")
+    version_text = proc_version.read_text(encoding="utf-8", errors="ignore").lower() if proc_version.is_file() else ""
+    is_wsl = os.name == "posix" and ("microsoft" in version_text or "wsl" in version_text)
+    is_linux = os.name == "posix"
+    return {
+        "platform": sys.platform,
+        "os_name": os.name,
+        "is_wsl": is_wsl,
+        "label": "WSL/Linux" if is_wsl else ("Linux" if is_linux else "Native Windows"),
+        "recommended": is_linux,
+        "message": (
+            "Recommended for musubi-tuner paths and shell scripts."
+            if is_linux
+            else "Windows is supported for the web shell, but generated musubi commands expect Linux-style paths."
+        ),
+    }
+
+
 def safe_project_image(config: krea2_lora.AppConfig, project: str, image: str) -> Path:
     require_project(project)
     if not image:
@@ -235,6 +304,8 @@ class Handler(BaseHTTPRequestHandler):
             "captioning": config.captioning,
             "projects": project_names(config),
             "checks": checks,
+            "models": model_inventory(config),
+            "runtime": runtime_payload(),
         }
 
     def report_payload(self, project: str) -> dict[str, object]:

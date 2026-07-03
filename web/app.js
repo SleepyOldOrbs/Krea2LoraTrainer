@@ -5,6 +5,8 @@ const state = {
   captionDefaultsLoaded: false,
   latestReport: null,
   reviewFilter: "all",
+  timeline: [],
+  activeTimelineId: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -60,6 +62,12 @@ function setRunSummary(text, level = "neutral") {
   summary.className = `run-summary ${level}`;
 }
 
+function statusTone(status) {
+  if (["ok", "installed", "ready", "completed"].includes(status)) return "ok";
+  if (["error", "missing", "failed"].includes(status)) return "error";
+  return "warn";
+}
+
 function completionKey(action) {
   const project = values().project || "no-project";
   return `krea2.workflow.${project}.${action}`;
@@ -80,8 +88,9 @@ function markActionComplete(action, complete) {
   } else {
     localStorage.removeItem(key);
   }
-  const button = document.querySelector(`button[data-action="${CSS.escape(action)}"]`);
-  if (button) button.classList.toggle("complete", complete);
+  document.querySelectorAll(`button[data-action="${CSS.escape(action)}"]`).forEach((button) => {
+    button.classList.toggle("complete", complete);
+  });
 }
 
 function resetCompletedActions(project) {
@@ -133,6 +142,8 @@ function renderConfig(config) {
     state.captionDefaultsLoaded = true;
   }
   renderStatus(config.checks);
+  renderModelInventory(config);
+  renderReadiness();
   restoreCompletedActions();
 }
 
@@ -171,6 +182,7 @@ function renderReport(report) {
     wrap.innerHTML = `<dt>${label}</dt><dd>${value}</dd>`;
     grid.appendChild(wrap);
   });
+  renderReadiness();
 }
 
 function resetReport() {
@@ -182,6 +194,132 @@ function resetReport() {
     wrap.innerHTML = `<dt>${label}</dt><dd>-</dd>`;
     grid.appendChild(wrap);
   });
+  renderReadiness();
+}
+
+function setReadinessCard(id, tone, value, description) {
+  const card = $(id);
+  card.className = `readiness-card ${tone}`;
+  card.querySelector("strong").textContent = value;
+  card.querySelector("span:last-child").textContent = description;
+}
+
+function renderReadiness() {
+  const form = values();
+  const config = state.config;
+  const report = state.latestReport;
+  setReadinessCard(
+    "readyProject",
+    form.project ? "ok" : "warn",
+    form.project || "No project",
+    report ? `${report.images.image_count} images in current report.` : "Run Dataset Report before caching or training."
+  );
+  setReadinessCard(
+    "readySource",
+    form.source_dir ? "ok" : "warn",
+    form.source_dir || "No source path",
+    "This is the image folder used by Import Images."
+  );
+  setReadinessCard(
+    "readyTrigger",
+    form.trigger ? "ok" : "warn",
+    form.trigger || "No trigger word",
+    "Used for caption stubs and LoRA activation."
+  );
+  const runtime = config?.runtime;
+  setReadinessCard(
+    "readyRuntime",
+    runtime?.recommended ? "ok" : "warn",
+    runtime?.label || "Unknown",
+    runtime?.message || "Runtime status will appear after config loads."
+  );
+}
+
+function renderModelInventory(config) {
+  const list = $("modelInventory");
+  list.innerHTML = "";
+  (config.models || []).forEach((model) => {
+    const row = document.createElement("article");
+    row.className = `model-row ${statusTone(model.status)}`;
+
+    const copy = document.createElement("div");
+    copy.className = "model-copy";
+    const title = document.createElement("div");
+    title.className = "model-title";
+    title.textContent = model.label || model.name;
+    const detail = document.createElement("div");
+    detail.className = "model-detail";
+    detail.textContent = `${model.repo} | ${model.file}`;
+    const path = document.createElement("div");
+    path.className = "model-path";
+    path.textContent = model.path;
+    copy.append(title, detail, path);
+
+    const status = document.createElement("span");
+    status.className = `model-status ${statusTone(model.status)}`;
+    status.textContent = model.status === "installed" ? "Installed" : "Missing";
+    row.append(copy, status);
+    list.appendChild(row);
+  });
+
+  const runtime = config.runtime;
+  $("runtimeNote").textContent = runtime
+    ? `${runtime.label}: ${runtime.message}`
+    : "Runtime status will appear after config loads.";
+}
+
+function renderTimeline() {
+  const timeline = $("actionTimeline");
+  timeline.innerHTML = "";
+  if (!state.timeline.length) {
+    const empty = document.createElement("div");
+    empty.className = "timeline-empty";
+    empty.textContent = "No workflow actions have run yet.";
+    timeline.appendChild(empty);
+    return;
+  }
+  state.timeline.slice(0, 5).forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = `timeline-item ${entry.level}`;
+    const dot = document.createElement("span");
+    dot.className = "timeline-dot";
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = `${entry.status} | ${entry.title}`;
+    const detail = document.createElement("span");
+    detail.textContent = entry.text;
+    copy.append(title, detail);
+    const time = document.createElement("time");
+    time.textContent = entry.time;
+    row.append(dot, copy, time);
+    timeline.appendChild(row);
+  });
+}
+
+function startTimelineEntry(action) {
+  const id = `${Date.now()}-${action}`;
+  state.activeTimelineId = id;
+  state.timeline.unshift({
+    id,
+    action,
+    title: ACTION_TITLES[action] || action,
+    status: "Running",
+    text: "Command started. Waiting for result.",
+    level: "warn",
+    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+  });
+  renderTimeline();
+}
+
+function finishTimelineEntry(action, summary, ok) {
+  const entry = state.timeline.find((item) => item.id === state.activeTimelineId && item.action === action);
+  if (!entry) return;
+  entry.status = ok ? "Completed" : "Failed";
+  entry.text = summary.text;
+  entry.level = summary.level;
+  entry.time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  state.activeTimelineId = null;
+  renderTimeline();
 }
 
 async function refreshConfig() {
@@ -273,6 +411,26 @@ function renderDatasetSummary(counts) {
   });
 }
 
+function renderCaptionGate(counts) {
+  const gate = $("captionGate");
+  const generateButton = $("generateMissingCaptions");
+  if (!counts.total) {
+    gate.className = "caption-gate warn";
+    gate.textContent = "No project images found. Import images before caching or training.";
+    generateButton.disabled = true;
+    return;
+  }
+  if (!counts.needs) {
+    gate.className = "caption-gate ok";
+    gate.textContent = "Caption gate passed. This image set is ready for latent and text cache steps.";
+    generateButton.disabled = true;
+    return;
+  }
+  gate.className = "caption-gate error";
+  gate.textContent = `${counts.needs} images need captions before this dataset is ready for cache steps.`;
+  generateButton.disabled = state.busy;
+}
+
 function updateReviewFilters(counts) {
   const labels = {
     all: `All ${counts.total}`,
@@ -297,6 +455,7 @@ function renderDatasetReview(report) {
     `${counts.total} images. ${counts.ready} captions ready, ${counts.missing} missing, ${counts.empty} empty.`;
   renderDatasetSummary(counts);
   updateReviewFilters(counts);
+  renderCaptionGate(counts);
   list.innerHTML = "";
   if (!items.length) {
     const emptyMessage = document.createElement("div");
@@ -444,6 +603,7 @@ async function runAction(action) {
   setBusy(true);
   const payload = payloadFor(action);
   setRunSummary(`Running ${ACTION_TITLES[action] || payload.action}...`, "warn");
+  startTimelineEntry(action);
   appendLog(`$ ${payload.action} ${payload.project || ""}`.trim());
   try {
     const result = await postJSON("/api/run", payload);
@@ -452,6 +612,7 @@ async function runAction(action) {
     markActionComplete(action, result.returncode === 0);
     const summary = summarizeResult(action, result);
     setRunSummary(summary.text, summary.level);
+    finishTimelineEntry(action, summary, result.returncode === 0);
     await refreshConfig();
     const report = await refreshReport();
     if (action === "dataset-report") {
@@ -459,10 +620,18 @@ async function runAction(action) {
     }
   } catch (error) {
     markActionComplete(action, false);
-    setRunSummary(`${ACTION_TITLES[action] || "Action"} could not start: ${error.message}`, "error");
+    const summary = {
+      text: `${ACTION_TITLES[action] || "Action"} could not start: ${error.message}`,
+      level: "error",
+    };
+    setRunSummary(summary.text, summary.level);
+    finishTimelineEntry(action, summary, false);
     appendLog(`error: ${error.message}`);
   } finally {
     setBusy(false);
+    if (state.latestReport && !$("datasetModal").hidden) {
+      renderDatasetReview(state.latestReport);
+    }
   }
 }
 
@@ -512,15 +681,23 @@ function clearProject() {
   resetReport();
   state.latestReport = null;
   state.reviewFilter = "all";
+  state.timeline = [];
   $("consoleLog").textContent = "Ready.";
+  renderTimeline();
   setRunSummary("Project fields cleared. Workflow ticks were reset. No files were deleted.", "ok");
   closeDatasetReview();
   restoreCompletedActions();
+  renderReadiness();
 }
 
 async function reviewCurrentDataset() {
   const report = state.latestReport || (await refreshReport());
   openDatasetReview(report);
+}
+
+function runMissingCaptions() {
+  closeDatasetReview();
+  runAction("generate-captions");
 }
 
 function bind() {
@@ -529,11 +706,14 @@ function bind() {
   });
   $("clearLog").addEventListener("click", () => {
     $("consoleLog").textContent = "Ready.";
+    state.timeline = [];
+    renderTimeline();
     setRunSummary("Run log cleared. Workflow state is unchanged.", "neutral");
   });
   $("clearProject").addEventListener("click", clearProject);
   $("reviewDataset").addEventListener("click", reviewCurrentDataset);
   $("closeDatasetModal").addEventListener("click", closeDatasetReview);
+  $("generateMissingCaptions").addEventListener("click", runMissingCaptions);
   document.querySelectorAll(".review-filter").forEach((button) => {
     button.addEventListener("click", () => {
       state.reviewFilter = button.dataset.filter || "all";
@@ -549,9 +729,13 @@ function bind() {
   $("projectName").addEventListener("input", () => {
     state.projectCleared = false;
     state.latestReport = null;
+    renderReadiness();
   });
   $("projectName").addEventListener("change", refreshReport);
   $("projectName").addEventListener("change", restoreCompletedActions);
+  ["sourceDir", "trigger"].forEach((id) => {
+    $(id).addEventListener("input", renderReadiness);
+  });
   $("pickSourceDir").addEventListener("click", pickSourceFolder);
   $("sourcePicker").addEventListener("change", handleSourcePickerChange);
   $("mode").addEventListener("change", updateModeHelp);

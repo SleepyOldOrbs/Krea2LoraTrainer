@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 import unittest
@@ -126,6 +127,53 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(web_app.safe_project_image(config, "demo", "ok.png"), project_images / "ok.png")
             with self.assertRaises(ValueError):
                 web_app.safe_project_image(config, "demo", "../outside.png")
+
+    def test_model_inventory_reports_file_and_vl_cache_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / "models" / "krea2" / "raw.safetensors"
+            raw.parent.mkdir(parents=True)
+            raw.write_bytes(b"raw")
+            cache = root / "hf" / "hub" / "models--example--vl" / "snapshots" / "abc"
+            cache.mkdir(parents=True)
+            old_home = os.environ.get("HF_HOME")
+            os.environ["HF_HOME"] = str(root / "hf")
+            try:
+                config = krea2_lora.AppConfig(
+                    paths={
+                        "projects_root": root / "projects",
+                        "musubi_repo": root / "musubi",
+                        "musubi_venv": root / "musubi-venv",
+                        "captioning_venv": root / "caption-venv",
+                        "krea_raw": raw,
+                        "qwen_vae": root / "models" / "vae.safetensors",
+                        "qwen_text_encoder": root / "models" / "text.safetensors",
+                        "comfy_lora_dir": root / "comfy",
+                    },
+                    dataset={},
+                    training={},
+                    downloads={
+                        "krea_raw_repo": "krea/Krea-2-Raw",
+                        "krea_raw_file": "raw.safetensors",
+                        "qwen_vae_repo": "Comfy-Org/Qwen-Image-Edit_ComfyUI",
+                        "qwen_vae_file": "split_files/vae/qwen_image_vae.safetensors",
+                        "qwen_text_encoder_repo": "Comfy-Org/Qwen3-VL",
+                        "qwen_text_encoder_file": "text_encoders/qwen3vl_4b_bf16.safetensors",
+                    },
+                    captioning={"model": "example/vl"},
+                )
+
+                inventory = web_app.model_inventory(config)
+            finally:
+                if old_home is None:
+                    os.environ.pop("HF_HOME", None)
+                else:
+                    os.environ["HF_HOME"] = old_home
+
+        statuses = {item["name"]: item["status"] for item in inventory}
+        self.assertEqual(statuses["krea_raw"], "installed")
+        self.assertEqual(statuses["qwen_vae"], "missing")
+        self.assertEqual(statuses["vl_caption"], "installed")
 
     def test_rejects_unknown_action(self) -> None:
         with self.assertRaises(ValueError):

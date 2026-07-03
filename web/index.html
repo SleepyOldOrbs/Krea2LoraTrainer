@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Krea2 LoRA Helper</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -37,6 +38,29 @@
             <div class="status-strip" id="statusStrip"></div>
           </div>
         </header>
+
+        <section class="readiness-band" aria-label="Project readiness">
+          <div class="readiness-card" id="readyProject">
+            <span class="readiness-label">Project</span>
+            <strong>-</strong>
+            <span>Select or enter a project name.</span>
+          </div>
+          <div class="readiness-card" id="readySource">
+            <span class="readiness-label">Source</span>
+            <strong>-</strong>
+            <span>Choose the image folder the server can read.</span>
+          </div>
+          <div class="readiness-card" id="readyTrigger">
+            <span class="readiness-label">Trigger</span>
+            <strong>-</strong>
+            <span>Used for captions and LoRA activation.</span>
+          </div>
+          <div class="readiness-card" id="readyRuntime">
+            <span class="readiness-label">Runtime</span>
+            <strong>-</strong>
+            <span>Checking server runtime.</span>
+          </div>
+        </section>
 
         <section class="panel controls" id="setup">
           <div class="field">
@@ -168,6 +192,18 @@
               <div><dt>Outputs</dt><dd>-</dd></div>
             </dl>
           </div>
+
+          <div class="panel model-panel" id="models">
+            <div class="section-heading model-heading">
+              <div>
+                <span class="caption">Models</span>
+                <h3>Inventory</h3>
+              </div>
+              <button class="ghost compact" type="button" data-action="download-models">Download Missing</button>
+            </div>
+            <div id="modelInventory" class="model-list" aria-live="polite"></div>
+            <div id="runtimeNote" class="runtime-note">Runtime status will appear after config loads.</div>
+          </div>
         </section>
 
         <section class="panel console-panel" id="cache">
@@ -177,6 +213,9 @@
               <h3>Run Log</h3>
             </div>
             <button id="clearLog" class="ghost">Clear</button>
+          </div>
+          <div id="actionTimeline" class="timeline" aria-live="polite">
+            <div class="timeline-empty">No workflow actions have run yet.</div>
           </div>
           <div id="runSummary" class="run-summary neutral" aria-live="polite">No workflow actions have run yet.</div>
           <pre id="consoleLog" aria-live="polite">Ready.</pre>
@@ -196,12 +235,16 @@
         </header>
         <div class="review-toolbar" aria-label="Dataset review controls">
           <div id="datasetReviewSummary" class="review-summary"></div>
-          <div class="review-filters" role="group" aria-label="Filter dataset review">
-            <button class="review-filter active" type="button" data-filter="all">All</button>
-            <button class="review-filter" type="button" data-filter="ready">Ready</button>
-            <button class="review-filter" type="button" data-filter="needs">Needs attention</button>
+          <div class="review-actions">
+            <div class="review-filters" role="group" aria-label="Filter dataset review">
+              <button class="review-filter active" type="button" data-filter="all">All</button>
+              <button class="review-filter" type="button" data-filter="ready">Ready</button>
+              <button class="review-filter" type="button" data-filter="needs">Needs attention</button>
+            </div>
+            <button id="generateMissingCaptions" class="ghost compact" type="button">Generate Missing</button>
           </div>
         </div>
+        <div id="captionGate" class="caption-gate">Run Dataset Report to check caption readiness.</div>
         <div id="datasetReviewList" class="review-list"></div>
       </section>
     </div>
