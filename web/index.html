@@ -15,6 +15,7 @@
         </div>
         <nav class="nav-list" aria-label="Workflow">
           <a href="#setup">Setup</a>
+          <a href="#captions">Captions</a>
           <a href="#dataset">Dataset</a>
           <a href="#cache">Cache</a>
           <a href="#output">Output</a>
@@ -31,7 +32,10 @@
             <span class="caption">Localhost</span>
             <h2>Project Control</h2>
           </div>
-          <div class="status-strip" id="statusStrip"></div>
+          <div class="topbar-actions">
+            <button id="clearProject" class="ghost" type="button">Clear Project</button>
+            <div class="status-strip" id="statusStrip"></div>
+          </div>
         </header>
 
         <section class="panel controls" id="setup">
@@ -62,6 +66,21 @@
             </select>
             <p class="field-help" id="modeHelp">Symlink references the originals without duplicating large images.</p>
           </div>
+          <div class="caption-controls" id="captions">
+            <div class="field">
+              <label for="captionModel">VL Caption Model</label>
+              <input id="captionModel" value="Salesforce/blip-image-captioning-base" autocomplete="off">
+              <p class="field-help">Runs from the configured captioning venv and writes matching .txt captions.</p>
+            </div>
+            <label class="check-control" for="captionLocalOnly">
+              <input id="captionLocalOnly" type="checkbox" checked>
+              <span>Use local model cache only</span>
+            </label>
+            <label class="check-control" for="overwriteCaptions">
+              <input id="overwriteCaptions" type="checkbox">
+              <span>Replace existing captions</span>
+            </label>
+          </div>
         </section>
 
         <section class="grid">
@@ -91,38 +110,43 @@
                 <span class="button-copy"><span class="button-title">Import Images</span><span class="button-note">Copy, symlink, or hardlink source images into the project.</span></span>
                 <span class="run-state" aria-hidden="true">✓</span>
               </button>
-              <button class="workflow-button" data-action="dataset-report">
+              <button class="workflow-button" data-action="generate-captions">
                 <span class="step-number">5</span>
+                <span class="button-copy"><span class="button-title">Generate VL Captions</span><span class="button-note">Use the captioning venv and VL model to create missing captions.</span></span>
+                <span class="run-state" aria-hidden="true">✓</span>
+              </button>
+              <button class="workflow-button" data-action="dataset-report">
+                <span class="step-number">6</span>
                 <span class="button-copy"><span class="button-title">Dataset Report</span><span class="button-note">Check image count, captions, cache files, and outputs.</span></span>
                 <span class="run-state" aria-hidden="true">✓</span>
               </button>
               <button class="workflow-button" data-action="cache-latents-dry">
-                <span class="step-number">6</span>
+                <span class="step-number">7</span>
                 <span class="button-copy"><span class="button-title">Dry Run Latents</span><span class="button-note">Preview the VAE latent-cache command without running it.</span></span>
                 <span class="run-state" aria-hidden="true">✓</span>
               </button>
               <button class="workflow-button" data-action="cache-text-dry">
-                <span class="step-number">7</span>
+                <span class="step-number">8</span>
                 <span class="button-copy"><span class="button-title">Dry Run Text Cache</span><span class="button-note">Preview the Qwen text-cache command without running it.</span></span>
                 <span class="run-state" aria-hidden="true">✓</span>
               </button>
               <button class="workflow-button primary" data-action="train-dry">
-                <span class="step-number">8</span>
+                <span class="step-number">9</span>
                 <span class="button-copy"><span class="button-title">Train Dry Run</span><span class="button-note">Print the full training command. This does not train.</span></span>
                 <span class="run-state" aria-hidden="true">✓</span>
               </button>
               <button class="workflow-button" data-action="cache-latents">
-                <span class="step-number">9</span>
+                <span class="step-number">10</span>
                 <span class="button-copy"><span class="button-title">Run Latent Cache</span><span class="button-note">Encode image latents into the project cache folder.</span></span>
                 <span class="run-state" aria-hidden="true">✓</span>
               </button>
               <button class="workflow-button" data-action="cache-text">
-                <span class="step-number">10</span>
+                <span class="step-number">11</span>
                 <span class="button-copy"><span class="button-title">Run Text Cache</span><span class="button-note">Encode captions with the Qwen text encoder.</span></span>
                 <span class="run-state" aria-hidden="true">✓</span>
               </button>
               <button class="workflow-button" data-action="copy-to-comfy">
-                <span class="step-number">11</span>
+                <span class="step-number">12</span>
                 <span class="button-copy"><span class="button-title">Copy To ComfyUI</span><span class="button-note">Copy the newest LoRA output to the ComfyUI folder.</span></span>
                 <span class="run-state" aria-hidden="true">✓</span>
               </button>
@@ -151,6 +175,7 @@
             </div>
             <button id="clearLog" class="ghost">Clear</button>
           </div>
+          <div id="runSummary" class="run-summary neutral" aria-live="polite">No workflow actions have run yet.</div>
           <pre id="consoleLog" aria-live="polite">Ready.</pre>
         </section>
       </main>

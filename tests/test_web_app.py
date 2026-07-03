@@ -39,6 +39,40 @@ class WebAppTests(unittest.TestCase):
             ["import-images", "demo", "/mnt/c/Temp/JAG", "--mode", "symlink", "--trigger", "jagmoon style"],
         )
 
+    def test_generate_captions_args_are_whitelisted(self) -> None:
+        args = web_app.build_cli_args(
+            {
+                "action": "generate-captions",
+                "project": "demo",
+                "trigger": "jagmoon style",
+                "caption_model": "Salesforce/blip-image-captioning-base",
+                "caption_local_only": True,
+            }
+        )
+        self.assertEqual(
+            args[-7:],
+            [
+                "generate-captions",
+                "demo",
+                "--model",
+                "Salesforce/blip-image-captioning-base",
+                "--trigger",
+                "jagmoon style",
+                "--local-files-only",
+            ],
+        )
+
+    def test_generate_captions_can_allow_downloads(self) -> None:
+        args = web_app.build_cli_args(
+            {
+                "action": "generate-captions",
+                "project": "demo",
+                "caption_local_only": False,
+            }
+        )
+        self.assertIn("--allow-downloads", args)
+        self.assertNotIn("--local-files-only", args)
+
     def test_rejects_unknown_action(self) -> None:
         with self.assertRaises(ValueError):
             web_app.build_cli_args({"action": "rm-rf", "project": "demo"})

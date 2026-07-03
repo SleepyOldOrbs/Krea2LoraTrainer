@@ -78,6 +78,21 @@ def build_cli_args(payload: dict[str, object], config: Path | None = None) -> li
         if not trigger:
             raise ValueError("trigger is required")
         args.extend(["create-caption-stubs", project, "--trigger", trigger])
+    elif action == "generate-captions":
+        require_project(project)
+        args.extend(["generate-captions", project])
+        caption_model = text_value(payload, "caption_model")
+        if caption_model:
+            args.extend(["--model", caption_model])
+        trigger = text_value(payload, "trigger")
+        if trigger:
+            args.extend(["--trigger", trigger])
+        if bool_value(payload, "force_caption"):
+            args.append("--force")
+        if bool_value(payload, "caption_local_only", True):
+            args.append("--local-files-only")
+        else:
+            args.append("--allow-downloads")
     elif action == "dataset-report":
         require_project(project)
         args.extend(["dataset-report", project])
@@ -167,6 +182,7 @@ class Handler(BaseHTTPRequestHandler):
             "dataset": config.dataset,
             "training": config.training,
             "downloads": config.downloads,
+            "captioning": config.captioning,
             "projects": project_names(config),
             "checks": checks,
         }

@@ -9,7 +9,7 @@ The intended workflow is RAW training with Krea 2 RAW, then using the resulting 
 - WSL2 Ubuntu 24.04 or another Linux shell with Python 3.11+
 - Existing `musubi-tuner` checkout at `~/src/musubi-tuner`
 - Existing musubi virtual environment at `~/.venvs/musubi-krea2`
-- Existing captioning virtual environment at `~/.venvs/vl-caption`
+- Existing captioning virtual environment at `~/.venvs/vl-caption` with `pillow` and `transformers` for VL captions
 - Existing model files:
   - `~/ai_models/krea2/raw.safetensors`
   - `~/ai_models/qwen/split_files/vae/qwen_image_vae.safetensors`
@@ -87,6 +87,14 @@ Create caption stubs:
 python krea2_lora.py create-caption-stubs jagmoon --trigger "jagmoon style"
 ```
 
+Generate missing captions with a vision-language model from the captioning venv:
+
+```bash
+python krea2_lora.py generate-captions jagmoon --trigger "jagmoon style"
+```
+
+By default, VL captioning uses `Salesforce/blip-image-captioning-base` and `--local-files-only`, so it only uses a model already present in the Hugging Face cache. Use `--allow-downloads` when you explicitly want Transformers to fetch the caption model into the local HF cache.
+
 Check the dataset:
 
 ```bash
@@ -148,7 +156,11 @@ Then open:
 http://127.0.0.1:8765/
 ```
 
-The web app is a local-only operational dashboard for the same helper commands. It can validate the environment, verify models, initialize projects, import images, show dataset reports, dry-run cache/train commands, run cache steps, and copy the latest LoRA to ComfyUI. The training action is guarded by the backend and defaults to `--dry-run`.
+The web app is a local-only operational dashboard for the same helper commands. It can validate the environment, verify models, initialize projects, import images, generate VL captions, show dataset reports, dry-run cache/train commands, run cache steps, and copy the latest LoRA to ComfyUI. The training action is guarded by the backend and defaults to `--dry-run`.
+
+The Project Control header includes a `Clear Project` button. It clears the form fields and local workflow ticks only; it does not delete project files.
+
+The Run Log includes a summary box above the raw command output with a plain-language result for the last workflow action.
 
 ## Commands
 
@@ -161,6 +173,7 @@ The web app is a local-only operational dashboard for the same helper commands. 
 - `dataset-report PROJECT_NAME`: summarize image size/counts, caption state, cache files, and outputs
 - `wizard [PROJECT_NAME]`: open a guided terminal menu for setup, import, reports, dry-runs, caching, and copy-to-Comfy
 - `create-caption-stubs PROJECT_NAME --trigger "...":` create or fill missing/empty captions
+- `generate-captions PROJECT_NAME`: generate missing/empty captions with a vision-language model in the captioning venv
 - `cache-latents PROJECT_NAME`: run `krea2_cache_latents.py`
 - `cache-text PROJECT_NAME`: run `krea2_cache_text_encoder_outputs.py`
 - `train PROJECT_NAME`: run the conservative Krea 2 RAW LoRA training command
@@ -176,6 +189,8 @@ Do not put model files, datasets, caches, outputs, or LoRA weights inside this r
 This helper does not support cloud training and does not train on Krea 2 Turbo. It uses the RAW model path for training and leaves Turbo use to ComfyUI inference.
 
 `download-models` skips existing non-empty target files unless `--force` is supplied. Keep the configured destinations outside this repo.
+
+VL caption generation writes `.txt` sidecars next to project images. It does not store model files in this repo. Keep `captioning.local_files_only = true` or pass `--local-files-only` when you want to prevent Hugging Face downloads during captioning.
 
 ## Musubi reference
 

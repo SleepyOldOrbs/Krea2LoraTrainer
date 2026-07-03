@@ -1,3 +1,5 @@
+import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -124,6 +126,33 @@ comfy_lora_dir = "{toml_path(self.comfy)}"
         )
         self.assertEqual(self.run_cli("dataset-report", "jagmoon"), 0)
         self.assertEqual((self.projects / "jagmoon" / "images" / "one.txt").read_text(encoding="utf-8"), "jagmoon style\n")
+
+    def test_generate_captions_dry_run_does_not_write_files(self) -> None:
+        self.assertEqual(self.run_cli("init-project", "jagmoon"), 0)
+        image = self.projects / "jagmoon" / "images" / "sample.png"
+        image.write_bytes(b"not really an image")
+
+        self.assertEqual(self.run_cli("generate-captions", "jagmoon", "--dry-run"), 0)
+        self.assertFalse(image.with_suffix(".txt").exists())
+
+    def test_generate_captions_invokes_captioning_venv(self) -> None:
+        self.assertEqual(self.run_cli("init-project", "jagmoon"), 0)
+        image = self.projects / "jagmoon" / "images" / "sample.png"
+        image.write_bytes(b"not really an image")
+
+        def fake_run(command, input=None, text=None, capture_output=None, check=None):
+            self.assertEqual(command[0], str(self.caption_venv / "bin" / "python"))
+            self.assertIn("--local-files-only", command)
+            payload = json.loads(input)
+            Path(payload["items"][0]["caption"]).write_text("jagmoon style, generated caption\n", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, "VL caption generation wrote 1 captions.\n", "")
+
+        with mock.patch.object(krea2_lora.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(
+                self.run_cli("generate-captions", "jagmoon", "--trigger", "jagmoon style"),
+                0,
+            )
+        self.assertEqual(image.with_suffix(".txt").read_text(encoding="utf-8"), "jagmoon style, generated caption\n")
 
     def test_cli_path_converts_windows_paths_under_posix(self) -> None:
         with mock.patch.object(krea2_lora.os, "name", "posix"):

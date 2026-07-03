@@ -23,6 +23,98 @@ except ModuleNotFoundError:  # pragma: no cover - only hit on Python < 3.11
 
 IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 WINDOWS_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)")
+VLM_CAPTION_SCRIPT = r"""
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+
+def clean_text(value):
+    value = re.sub(r"\s+", " ", str(value or "")).strip()
+    return value.strip(" .")
+
+
+def generated_text(result):
+    if isinstance(result, list) and result:
+        first = result[0]
+        if isinstance(first, dict):
+            return clean_text(first.get("generated_text") or first.get("caption") or "")
+        return clean_text(first)
+    return ""
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate image captions with a local vision-language model.")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--trigger", default="")
+    parser.add_argument("--max-new-tokens", type=int, default=64)
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    parser.add_argument("--local-files-only", action="store_true")
+    args = parser.parse_args()
+
+    if args.local_files_only:
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+    try:
+        from PIL import Image
+        from transformers import pipeline
+    except Exception as exc:
+        print(
+            "error: captioning venv needs pillow and transformers installed "
+            f"before VL captions can run: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+
+    pipeline_args = {"model": args.model}
+    if args.device == "cpu":
+        pipeline_args["device"] = -1
+    elif args.device == "cuda":
+        pipeline_args["device"] = 0
+
+    try:
+        captioner = pipeline("image-to-text", **pipeline_args)
+    except Exception as exc:
+        print(f"error: could not load caption model {args.model!r}: {exc}", file=sys.stderr)
+        return 2
+
+    payload = json.load(sys.stdin)
+    written = 0
+    for item in payload["items"]:
+        image_path = Path(item["image"])
+        caption_path = Path(item["caption"])
+        try:
+            image = Image.open(image_path).convert("RGB")
+            text = generated_text(captioner(image, max_new_tokens=args.max_new_tokens))
+        except Exception as exc:
+            print(f"error: failed to caption {image_path}: {exc}", file=sys.stderr)
+            return 1
+
+        trigger = clean_text(args.trigger)
+        if trigger and text and trigger.lower() not in text.lower():
+            text = f"{trigger}, {text}"
+        elif trigger and not text:
+            text = trigger
+
+        if not text:
+            print(f"error: model returned an empty caption for {image_path}", file=sys.stderr)
+            return 1
+
+        caption_path.write_text(text + "\n", encoding="utf-8", newline="\n")
+        written += 1
+        print(f"captioned: {image_path.name} -> {caption_path.name}")
+
+    print(f"VL caption generation wrote {written} captions.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
 
 DEFAULT_CONFIG: dict[str, dict[str, Any]] = {
     "paths": {
@@ -64,6 +156,11 @@ DEFAULT_CONFIG: dict[str, dict[str, Any]] = {
         "qwen_text_encoder_repo": "Comfy-Org/Qwen3-VL",
         "qwen_text_encoder_file": "text_encoders/qwen3vl_4b_bf16.safetensors",
     },
+    "captioning": {
+        "model": "Salesforce/blip-image-captioning-base",
+        "max_new_tokens": 64,
+        "local_files_only": True,
+    },
 }
 
 
@@ -73,6 +170,7 @@ class AppConfig:
     dataset: dict[str, Any]
     training: dict[str, Any]
     downloads: dict[str, Any]
+    captioning: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -137,7 +235,13 @@ def load_config(path: Path | None) -> AppConfig:
 
     merged = deep_merge(DEFAULT_CONFIG, loaded)
     paths = {name: expand_path(value) for name, value in merged["paths"].items()}
-    return AppConfig(paths=paths, dataset=merged["dataset"], training=merged["training"], downloads=merged["downloads"])
+    return AppConfig(
+        paths=paths,
+        dataset=merged["dataset"],
+        training=merged["training"],
+        downloads=merged["downloads"],
+        captioning=merged["captioning"],
+    )
 
 
 def validate_project_name(name: str) -> str:
@@ -693,6 +797,10 @@ def show_config(args: argparse.Namespace) -> int:
     print("[downloads]")
     for key, value in config.downloads.items():
         print(f"{key} = {value}")
+    print()
+    print("[captioning]")
+    for key, value in config.captioning.items():
+        print(f"{key} = {value}")
     return 0
 
 
@@ -786,6 +894,99 @@ def create_caption_stubs(args: argparse.Namespace) -> int:
     return 0
 
 
+def captioning_python(config: AppConfig) -> Path:
+    return config.paths["captioning_venv"] / "bin" / "python"
+
+
+def caption_generation_targets(project: ProjectPaths, force: bool, limit: int | None) -> tuple[list[dict[str, str]], int]:
+    targets: list[dict[str, str]] = []
+    skipped = 0
+    for image in list_images(project.images):
+        caption = image.with_suffix(".txt")
+        existing = caption.exists() and caption.read_text(encoding="utf-8", errors="ignore").strip()
+        if existing and not force:
+            skipped += 1
+            continue
+        targets.append({"image": str(image), "caption": str(caption)})
+        if limit is not None and len(targets) >= limit:
+            break
+    return targets, skipped
+
+
+def generate_captions(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    project = project_paths(config, args.project_name)
+    if not project.images.is_dir():
+        print(f"Missing image directory: {project.images}")
+        return 1
+
+    images = list_images(project.images)
+    if not images:
+        print(f"No supported images found in {project.images}")
+        return 1
+
+    model = args.model or str(config.captioning["model"])
+    max_new_tokens = args.max_new_tokens or int(config.captioning["max_new_tokens"])
+    local_files_only = (
+        bool(config.captioning["local_files_only"]) if args.local_files_only is None else bool(args.local_files_only)
+    )
+    targets, skipped = caption_generation_targets(project, args.force, args.limit)
+    if not targets:
+        print(f"No captions need generation. Skipped {skipped} existing non-empty captions.")
+        return 0
+
+    python_bin = captioning_python(config)
+    if not python_bin.is_file():
+        print(f"Captioning venv python not found: {python_bin}")
+        return 1
+
+    command = [
+        str(python_bin),
+        "-c",
+        VLM_CAPTION_SCRIPT,
+        "--model",
+        model,
+        "--max-new-tokens",
+        str(max_new_tokens),
+        "--device",
+        args.device,
+    ]
+    if args.trigger:
+        command.extend(["--trigger", args.trigger.strip()])
+    if local_files_only:
+        command.append("--local-files-only")
+
+    print(f"Caption model: {model}")
+    print(f"Caption targets: {len(targets)} images. Skipped {skipped} existing non-empty captions.")
+    if local_files_only:
+        print("Local cache only: enabled. No Hugging Face downloads will be attempted.")
+    else:
+        print("Local cache only: disabled. Transformers may download the caption model into the HF cache.")
+    if args.dry_run:
+        for item in targets[:10]:
+            print(f"would caption: {item['image']} -> {item['caption']}")
+        if len(targets) > 10:
+            print(f"...and {len(targets) - 10} more")
+        print("Dry run: captions were not generated.")
+        return 0
+
+    completed = subprocess.run(
+        command,
+        input=json.dumps({"items": targets}),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.stdout:
+        print(completed.stdout, end="")
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
+    if completed.returncode:
+        return completed.returncode
+    print(f"Generated {len(targets)} captions. Skipped {skipped} existing non-empty captions.")
+    return 0
+
+
 def import_images(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     project = project_paths(config, args.project_name)
@@ -870,11 +1071,12 @@ def wizard(args: argparse.Namespace) -> int:
         print("2. Init project")
         print("3. Import/link images")
         print("4. Create/fill caption stubs")
-        print("5. Dataset report")
-        print("6. Dry-run cache and train commands")
-        print("7. Run latent cache")
-        print("8. Run text cache")
-        print("9. Copy latest LoRA to ComfyUI")
+        print("5. Generate VL captions")
+        print("6. Dataset report")
+        print("7. Dry-run cache and train commands")
+        print("8. Run latent cache")
+        print("9. Run text cache")
+        print("10. Copy latest LoRA to ComfyUI")
         print("0. Quit")
         try:
             choice = input("Select: ").strip()
@@ -908,16 +1110,32 @@ def wizard(args: argparse.Namespace) -> int:
             trigger = trigger or prompt_text("Caption trigger", required=True)
             create_caption_stubs(argparse.Namespace(config=args.config, project_name=project_name, trigger=trigger))
         elif choice == "5":
-            dataset_report(argparse.Namespace(config=args.config, project_name=project_name, json=None))
+            trigger = prompt_text("Caption trigger", default=trigger, required=False)
+            generate_captions(
+                argparse.Namespace(
+                    config=args.config,
+                    project_name=project_name,
+                    model=None,
+                    trigger=trigger,
+                    force=False,
+                    limit=None,
+                    max_new_tokens=None,
+                    device="auto",
+                    local_files_only=None,
+                    dry_run=False,
+                )
+            )
         elif choice == "6":
+            dataset_report(argparse.Namespace(config=args.config, project_name=project_name, json=None))
+        elif choice == "7":
             cache_latents(argparse.Namespace(config=args.config, project_name=project_name, dry_run=True, skip_checks=False))
             cache_text(argparse.Namespace(config=args.config, project_name=project_name, dry_run=True, skip_checks=False))
             train(argparse.Namespace(config=args.config, project_name=project_name, dry_run=True, skip_checks=False))
-        elif choice == "7":
-            cache_latents(argparse.Namespace(config=args.config, project_name=project_name, dry_run=False, skip_checks=False))
         elif choice == "8":
-            cache_text(argparse.Namespace(config=args.config, project_name=project_name, dry_run=False, skip_checks=False))
+            cache_latents(argparse.Namespace(config=args.config, project_name=project_name, dry_run=False, skip_checks=False))
         elif choice == "9":
+            cache_text(argparse.Namespace(config=args.config, project_name=project_name, dry_run=False, skip_checks=False))
+        elif choice == "10":
             copy_to_comfy(argparse.Namespace(config=args.config, project_name=project_name, file=None, dry_run=False))
         else:
             print("Unknown choice.")
@@ -1067,6 +1285,30 @@ def build_parser() -> argparse.ArgumentParser:
     stubs.add_argument("project_name")
     stubs.add_argument("--trigger", required=True, help="Caption stub text to write, usually the LoRA trigger phrase.")
     stubs.set_defaults(func=create_caption_stubs)
+
+    vl_captions = sub.add_parser("generate-captions", help="Generate missing/empty captions with a VL model.")
+    vl_captions.add_argument("project_name")
+    vl_captions.add_argument("--model", help="Hugging Face image-to-text model. Defaults to config.captioning.model.")
+    vl_captions.add_argument("--trigger", default="", help="Optional LoRA trigger phrase to prefix generated captions.")
+    vl_captions.add_argument("--force", action="store_true", help="Overwrite existing non-empty captions.")
+    vl_captions.add_argument("--limit", type=int, help="Maximum number of images to caption in this run.")
+    vl_captions.add_argument("--max-new-tokens", type=int, help="Maximum caption tokens. Defaults to config.")
+    vl_captions.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    vl_captions.add_argument(
+        "--local-files-only",
+        dest="local_files_only",
+        action="store_true",
+        default=None,
+        help="Only use models already present in the Hugging Face cache.",
+    )
+    vl_captions.add_argument(
+        "--allow-downloads",
+        dest="local_files_only",
+        action="store_false",
+        help="Allow transformers to download the caption model into the Hugging Face cache.",
+    )
+    vl_captions.add_argument("--dry-run", action="store_true", help="Show planned caption targets without running the VLM.")
+    vl_captions.set_defaults(func=generate_captions)
 
     for name, help_text, handler in [
         ("cache-latents", "Run Krea2 latent caching via musubi-tuner.", cache_latents),

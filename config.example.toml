@@ -36,3 +36,8 @@ qwen_vae_repo = "Comfy-Org/Qwen-Image-Edit_ComfyUI"
 qwen_vae_file = "split_files/vae/qwen_image_vae.safetensors"
 qwen_text_encoder_repo = "Comfy-Org/Qwen3-VL"
 qwen_text_encoder_file = "text_encoders/qwen3vl_4b_bf16.safetensors"
+
+[captioning]
+model = "Salesforce/blip-image-captioning-base"
+max_new_tokens = 64
+local_files_only = true
