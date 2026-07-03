@@ -22,6 +22,17 @@ ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
 MAX_CAPTION_CHARS = 20_000
 DOWNLOAD_MODEL_CHOICES = {"all", "krea_raw", "qwen_vae", "qwen_text_encoder", "vl_caption"}
+TRAIN_OVERRIDE_ARGS = {
+    "run_name": "--run-name",
+    "output_name": "--output-name",
+    "network_dim": "--network-dim",
+    "network_alpha": "--network-alpha",
+    "max_train_epochs": "--max-train-epochs",
+    "save_every_n_epochs": "--save-every-n-epochs",
+    "learning_rate": "--learning-rate",
+    "seed": "--seed",
+    "blocks_to_swap": "--blocks-to-swap",
+}
 
 
 class WebState:
@@ -120,11 +131,18 @@ def build_cli_args(payload: dict[str, object], config: Path | None = None) -> li
     elif action == "train":
         require_project(project)
         args.extend(["train", project])
+        for key, cli_arg in TRAIN_OVERRIDE_ARGS.items():
+            value = text_value(payload, key)
+            if value:
+                args.extend([cli_arg, value])
         if not (bool_value(payload, "allow_train") and text_value(payload, "confirm") == "RUN_TRAINING"):
             args.append("--dry-run")
     elif action == "copy-to-comfy":
         require_project(project)
         args.extend(["copy-to-comfy", project])
+        selected_file = text_value(payload, "file")
+        if selected_file:
+            args.extend(["--file", selected_file])
         if bool_value(payload, "dry_run"):
             args.append("--dry-run")
     elif action == "status":
@@ -145,7 +163,7 @@ def project_names(config: krea2_lora.AppConfig) -> list[str]:
     root = config.paths["projects_root"]
     if not root.is_dir():
         return []
-    return sorted(path.name for path in root.iterdir() if path.is_dir())
+    return sorted((path.name for path in root.iterdir() if path.is_dir()), key=krea2_lora.windows_sort_key)
 
 
 def caption_status(caption: Path) -> tuple[str, str]:

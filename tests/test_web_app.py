@@ -31,6 +31,28 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("train", args)
         self.assertNotIn("--dry-run", args)
 
+    def test_build_train_args_accepts_variant_overrides(self) -> None:
+        args = web_app.build_cli_args(
+            {
+                "action": "train",
+                "project": "demo",
+                "run_name": "dim32",
+                "network_dim": 32,
+                "network_alpha": 16,
+                "max_train_epochs": 12,
+                "learning_rate": "5e-5",
+                "seed": 123,
+            }
+        )
+
+        self.assertIn("--run-name", args)
+        self.assertIn("dim32", args)
+        self.assertIn("--network-dim", args)
+        self.assertIn("32", args)
+        self.assertIn("--max-train-epochs", args)
+        self.assertIn("12", args)
+        self.assertIn("--dry-run", args)
+
     def test_download_models_passes_caption_model(self) -> None:
         args = web_app.build_cli_args(
             {
@@ -93,6 +115,25 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("--allow-downloads", args)
         self.assertNotIn("--local-files-only", args)
 
+    def test_copy_to_comfy_accepts_selected_output_file(self) -> None:
+        args = web_app.build_cli_args(
+            {
+                "action": "copy-to-comfy",
+                "project": "demo",
+                "file": "/home/james/krea2_loras/demo/output/demo_dim32.safetensors",
+            }
+        )
+
+        self.assertEqual(
+            args[-4:],
+            [
+                "copy-to-comfy",
+                "demo",
+                "--file",
+                "/home/james/krea2_loras/demo/output/demo_dim32.safetensors",
+            ],
+        )
+
     def test_dataset_review_items_include_caption_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             images = Path(tmp) / "images"
@@ -108,6 +149,31 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(items[0]["relative_path"], "sample.jpg")
         self.assertEqual(items[0]["caption_status"], "ready")
         self.assertIn("generated caption", str(items[0]["caption"]))
+
+    def test_project_names_use_windows_style_natural_sort(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "projects"
+            for name in ["run10", "run2", "run1"]:
+                (projects / name).mkdir(parents=True)
+            config = krea2_lora.AppConfig(
+                paths={
+                    "projects_root": projects,
+                    "musubi_repo": root / "musubi",
+                    "musubi_venv": root / "musubi-venv",
+                    "captioning_venv": root / "caption-venv",
+                    "krea_raw": root / "models" / "raw.safetensors",
+                    "qwen_vae": root / "models" / "vae.safetensors",
+                    "qwen_text_encoder": root / "models" / "text.safetensors",
+                    "comfy_lora_dir": root / "comfy",
+                },
+                dataset={},
+                training={},
+                downloads={},
+                captioning={},
+            )
+
+            self.assertEqual(web_app.project_names(config), ["run1", "run2", "run10"])
 
     def test_safe_project_image_rejects_path_escape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -127,6 +128,22 @@ comfy_lora_dir = "{toml_path(self.comfy)}"
         self.assertEqual(self.run_cli("dataset-report", "jagmoon"), 0)
         self.assertEqual((self.projects / "jagmoon" / "images" / "one.txt").read_text(encoding="utf-8"), "jagmoon style\n")
 
+    def test_dataset_report_lists_lora_outputs_newest_first(self) -> None:
+        self.assertEqual(self.run_cli("init-project", "jagmoon"), 0)
+        output = self.projects / "jagmoon" / "output"
+        old = output / "jagmoon_krea2_lora_2.safetensors"
+        new = output / "jagmoon_krea2_lora_10.safetensors"
+        old.write_bytes(b"old")
+        new.write_bytes(b"new")
+        os.utime(old, (100, 100))
+        os.utime(new, (200, 200))
+        project = krea2_lora.project_paths(krea2_lora.load_config(self.config), "jagmoon")
+
+        report = krea2_lora.dataset_report_data(project)
+
+        self.assertEqual([item["name"] for item in report["lora_outputs"]], [new.name, old.name])
+        self.assertEqual(report["latest_lora"], str(new))
+
     def test_generate_captions_dry_run_does_not_write_files(self) -> None:
         self.assertEqual(self.run_cli("init-project", "jagmoon"), 0)
         image = self.projects / "jagmoon" / "images" / "sample.png"
@@ -158,9 +175,42 @@ comfy_lora_dir = "{toml_path(self.comfy)}"
         with mock.patch.object(krea2_lora.os, "name", "posix"):
             self.assertEqual(str(krea2_lora.cli_path(r"C:\Temp\JAG")), "/mnt/c/Temp/JAG")
 
+    def test_list_images_uses_windows_style_natural_sort(self) -> None:
+        images = self.root / "sorted-images"
+        images.mkdir()
+        for name in ["image10.png", "image2.png", "Image1.png", "image11.png"]:
+            (images / name).write_bytes(b"image")
+
+        ordered = [path.name for path in krea2_lora.list_images(images)]
+
+        self.assertEqual(ordered, ["Image1.png", "image2.png", "image10.png", "image11.png"])
+
     def test_train_dry_run_can_skip_checks(self) -> None:
         self.assertEqual(self.run_cli("init-project", "jagmoon"), 0)
         self.assertEqual(self.run_cli("train", "jagmoon", "--dry-run", "--skip-checks"), 0)
+
+    def test_train_command_accepts_run_variant_overrides(self) -> None:
+        config = krea2_lora.load_config(self.config)
+        project = krea2_lora.project_paths(config, "jagmoon")
+
+        script = krea2_lora.command_train(
+            config,
+            project,
+            run_name="dim32",
+            training_overrides={
+                "network_dim": 32,
+                "network_alpha": 16,
+                "max_train_epochs": 12,
+                "learning_rate": "5e-5",
+                "seed": 123,
+            },
+        )
+
+        self.assertIn("--network_dim 32", script)
+        self.assertIn("--max_train_epochs 12", script)
+        self.assertIn("--learning_rate 5e-5", script)
+        self.assertIn("--seed 123", script)
+        self.assertIn("--output_name jagmoon_krea2_lora_dim32", script)
 
     def test_validate_env_accepts_fake_local_layout(self) -> None:
         self.assertEqual(self.run_cli("validate-env", "--create-comfy-dir"), 0)

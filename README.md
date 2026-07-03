@@ -118,6 +118,16 @@ python krea2_lora.py cache-text jagmoon --dry-run
 python krea2_lora.py train jagmoon --dry-run
 ```
 
+Plan multiple LoRA training variants by giving each run a safe output suffix and optional training overrides:
+
+```bash
+python krea2_lora.py train jagmoon --dry-run --run-name baseline-16
+python krea2_lora.py train jagmoon --dry-run --run-name detail-32 --network-dim 32 --network-alpha 16
+python krea2_lora.py train jagmoon --dry-run --run-name fast-8 --network-dim 8 --network-alpha 8 --max-train-epochs 8
+```
+
+Each variant writes a distinct musubi `--output_name`, so multiple LoRA outputs can live in the same project output folder.
+
 Run the workflow when ready:
 
 ```bash
@@ -165,11 +175,15 @@ Then open:
 http://127.0.0.1:8765/
 ```
 
-The web app is a local-only operational dashboard for the same helper commands. It can validate the environment, download missing models, initialize projects, import images, generate VL captions, show dataset reports, dry-run cache/train commands, run cache steps, and copy the latest LoRA to ComfyUI. The training action is guarded by the backend and defaults to `--dry-run`.
+The web app is a local-only operational dashboard for the same helper commands. It can validate the environment, download missing models, initialize projects, import images, generate VL captions, show dataset reports, dry-run cache/train commands, plan multiple training variants, run cache steps, and copy the latest or selected LoRA to ComfyUI. The training action is guarded by the backend and defaults to `--dry-run`.
 
 The Project Control header includes a `Clear Project` button. It clears the form fields and local workflow ticks only; it does not delete project files.
 
 The Run Log includes a summary box above the raw command output with a plain-language result for the last workflow action.
+
+The Training Variants panel creates dry-run commands for several LoRA run configurations. Use `Add Variant` for another planned run, adjust dim/alpha/epochs/LR/seed, then dry-run it to inspect the exact command. Real training still requires explicit backend confirmation; the UI keeps this conservative by default.
+
+Dataset and project image lists use Windows-style natural ordering, so `image2.png` sorts before `image10.png`. LoRA outputs are listed newest-first, and each output row can be copied to the configured ComfyUI destination.
 
 ## Commands
 
@@ -185,7 +199,7 @@ The Run Log includes a summary box above the raw command output with a plain-lan
 - `generate-captions PROJECT_NAME`: generate missing/empty captions with a vision-language model in the captioning venv
 - `cache-latents PROJECT_NAME`: run `krea2_cache_latents.py`
 - `cache-text PROJECT_NAME`: run `krea2_cache_text_encoder_outputs.py`
-- `train PROJECT_NAME`: run the conservative Krea 2 RAW LoRA training command
+- `train PROJECT_NAME`: run the conservative Krea 2 RAW LoRA training command; accepts safe run/output names and common per-run overrides
 - `copy-to-comfy PROJECT_NAME`: copy the latest `.safetensors` from project output to ComfyUI
 - `status PROJECT_NAME`: summarize dataset, cache, and output state
 

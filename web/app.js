@@ -10,6 +10,8 @@ const state = {
   captionDrafts: {},
   modelProgress: {},
   runtimeProfile: "wsl",
+  trainingVariants: [],
+  trainingVariantsLoaded: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -62,9 +64,13 @@ function setBusy(next) {
   });
   if (state.config) {
     renderModelInventory(state.config);
+    renderTrainingVariants(state.config);
   }
   if (state.latestReport && !$("datasetModal").hidden) {
     renderDatasetReview(state.latestReport);
+  }
+  if (state.latestReport) {
+    renderLoraOutputs(state.latestReport);
   }
 }
 
@@ -156,6 +162,10 @@ function renderConfig(config) {
   }
   renderStatus(config.checks);
   renderModelInventory(config);
+  if (!state.trainingVariantsLoaded) {
+    initializeTrainingVariants(config);
+  }
+  renderTrainingVariants(config);
   renderReadiness();
   restoreCompletedActions();
 }
@@ -195,6 +205,7 @@ function renderReport(report) {
     wrap.innerHTML = `<dt>${label}</dt><dd>${value}</dd>`;
     grid.appendChild(wrap);
   });
+  renderLoraOutputs(report);
   renderReadiness();
 }
 
@@ -207,7 +218,46 @@ function resetReport() {
     wrap.innerHTML = `<dt>${label}</dt><dd>-</dd>`;
     grid.appendChild(wrap);
   });
+  renderLoraOutputs(null);
   renderReadiness();
+}
+
+function renderLoraOutputs(report) {
+  const list = $("loraOutputList");
+  const count = $("loraOutputCount");
+  if (!list || !count) return;
+  const outputs = report?.lora_outputs || [];
+  count.textContent = String(outputs.length);
+  list.innerHTML = "";
+  if (!outputs.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-output";
+    empty.textContent = "No LoRA outputs found yet.";
+    list.appendChild(empty);
+    return;
+  }
+  outputs.slice(0, 6).forEach((output, index) => {
+    const row = document.createElement("article");
+    row.className = "lora-output-row";
+    const copy = document.createElement("div");
+    copy.className = "lora-output-copy";
+    const name = document.createElement("strong");
+    name.textContent = output.name;
+    const meta = document.createElement("span");
+    const modified = output.modified ? new Date(output.modified * 1000).toLocaleString() : "Modified time unknown";
+    meta.textContent = `${index === 0 ? "Newest" : "Output"} | ${formatBytes(output.size_bytes)} | ${modified}`;
+    const path = document.createElement("code");
+    path.textContent = output.path;
+    copy.append(name, meta, path);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "compact";
+    button.textContent = "Copy";
+    button.disabled = state.busy;
+    button.addEventListener("click", () => copyLoraOutput(output.path));
+    row.append(copy, button);
+    list.appendChild(row);
+  });
 }
 
 function setReadinessCard(id, tone, value, description) {
@@ -330,6 +380,204 @@ function renderModelInventory(config) {
     ? `${runtime.label}: ${runtime.message}`
     : "Runtime status will appear after config loads.";
   renderRuntimeSelector(runtime);
+}
+
+function safeVariantName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^A-Za-z0-9._-]/g, "")
+    .replace(/^-+/, "")
+    .slice(0, 48);
+}
+
+function trainingValue(config, key, fallback) {
+  return config?.training?.[key] ?? fallback;
+}
+
+function trainingVariant(id, name, config, overrides = {}) {
+  const baseDim = Number(trainingValue(config, "network_dim", 16));
+  const baseAlpha = Number(trainingValue(config, "network_alpha", 16));
+  const baseEpochs = Number(trainingValue(config, "max_train_epochs", 20));
+  return {
+    id,
+    run_name: name,
+    network_dim: overrides.network_dim ?? baseDim,
+    network_alpha: overrides.network_alpha ?? baseAlpha,
+    max_train_epochs: overrides.max_train_epochs ?? baseEpochs,
+    learning_rate: overrides.learning_rate ?? trainingValue(config, "learning_rate", "1e-4"),
+    seed: overrides.seed ?? trainingValue(config, "seed", 42),
+    note: overrides.note || "Training dry run uses a unique output name.",
+  };
+}
+
+function initializeTrainingVariants(config) {
+  const baseDim = Number(trainingValue(config, "network_dim", 16));
+  const baseEpochs = Number(trainingValue(config, "max_train_epochs", 20));
+  state.trainingVariants = [
+    trainingVariant("variant-baseline", `baseline-${baseDim}`, config, {
+      note: "Current conservative settings with a unique output suffix.",
+    }),
+    trainingVariant("variant-detail", "detail-32", config, {
+      network_dim: Math.max(32, baseDim),
+      network_alpha: Math.max(16, Number(trainingValue(config, "network_alpha", 16))),
+      note: "Higher rank run for more capacity when the dataset is varied.",
+    }),
+    trainingVariant("variant-fast", "fast-8", config, {
+      network_dim: Math.min(8, baseDim),
+      network_alpha: Math.min(8, Number(trainingValue(config, "network_alpha", 16))),
+      max_train_epochs: Math.min(8, baseEpochs),
+      note: "Shorter probe run for checking the dataset before a long train.",
+    }),
+  ];
+  state.trainingVariantsLoaded = true;
+}
+
+function variantPayload(variant) {
+  return {
+    run_name: safeVariantName(variant.run_name),
+    network_dim: String(variant.network_dim || ""),
+    network_alpha: String(variant.network_alpha || ""),
+    max_train_epochs: String(variant.max_train_epochs || ""),
+    learning_rate: String(variant.learning_rate || ""),
+    seed: String(variant.seed || ""),
+  };
+}
+
+function updateTrainingVariant(id, key, value) {
+  const variant = state.trainingVariants.find((item) => item.id === id);
+  if (!variant) return;
+  variant[key] = key === "run_name" || key === "learning_rate" ? value : Number(value);
+}
+
+function addTrainingVariant() {
+  const index = state.trainingVariants.length + 1;
+  state.trainingVariants.push(
+    trainingVariant(`variant-custom-${Date.now()}`, `custom-${index}`, state.config || {}, {
+      note: "Custom run. Adjust fields before dry-running.",
+    })
+  );
+  renderTrainingVariants(state.config || {});
+}
+
+function removeTrainingVariant(id) {
+  state.trainingVariants = state.trainingVariants.filter((variant) => variant.id !== id);
+  renderTrainingVariants(state.config || {});
+}
+
+async function dryRunTrainingVariant(id) {
+  const variant = state.trainingVariants.find((item) => item.id === id);
+  if (!variant) return;
+  await runAction("train-dry", variantPayload(variant));
+}
+
+async function dryRunAllTrainingVariants() {
+  if (!state.trainingVariants.length) {
+    setRunSummary("Add a training variant before dry-running a plan.", "warn");
+    return;
+  }
+  for (const variant of state.trainingVariants) {
+    await runAction("train-dry", variantPayload(variant));
+  }
+}
+
+function trainingField(label, variant, key, type = "number") {
+  const field = document.createElement("label");
+  field.className = "variant-field";
+  const span = document.createElement("span");
+  span.textContent = label;
+  const input = document.createElement("input");
+  input.type = type;
+  input.value = variant[key];
+  input.disabled = state.busy;
+  input.addEventListener("input", () => updateTrainingVariant(variant.id, key, input.value));
+  field.append(span, input);
+  return field;
+}
+
+function previewOutputName(config, runName) {
+  const project = values().project || "project";
+  const safeRun = safeVariantName(runName) || "run";
+  const template = config?.training?.output_name_template || "{project}_krea2_lora";
+  let output = template.replaceAll("{project}", project).replaceAll("{run}", safeRun);
+  if (!template.includes("{run}")) {
+    output = `${output}_${safeRun}`;
+  }
+  return output;
+}
+
+function renderTrainingVariants(config) {
+  const list = $("trainingVariants");
+  if (!list) return;
+  list.innerHTML = "";
+  state.trainingVariants.forEach((variant) => {
+    const row = document.createElement("article");
+    row.className = "training-variant";
+
+    const head = document.createElement("div");
+    head.className = "variant-head";
+    const title = document.createElement("div");
+    title.className = "variant-title";
+    const nameLabel = document.createElement("label");
+    nameLabel.className = "variant-name";
+    const nameText = document.createElement("span");
+    nameText.textContent = "Run name";
+    const nameInput = document.createElement("input");
+    nameInput.value = variant.run_name;
+    nameInput.disabled = state.busy;
+    nameInput.addEventListener("input", () => updateTrainingVariant(variant.id, "run_name", nameInput.value));
+    nameLabel.append(nameText, nameInput);
+    const note = document.createElement("p");
+    note.textContent = variant.note;
+    title.append(nameLabel, note);
+
+    const actions = document.createElement("div");
+    actions.className = "variant-actions";
+    const dryRun = document.createElement("button");
+    dryRun.type = "button";
+    dryRun.className = "compact";
+    dryRun.textContent = "Dry Run";
+    dryRun.disabled = state.busy || !safeVariantName(variant.run_name);
+    dryRun.addEventListener("click", () => dryRunTrainingVariant(variant.id));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost compact";
+    remove.textContent = "Remove";
+    remove.disabled = state.busy || state.trainingVariants.length <= 1;
+    remove.addEventListener("click", () => removeTrainingVariant(variant.id));
+    actions.append(dryRun, remove);
+    head.append(title, actions);
+
+    const fields = document.createElement("div");
+    fields.className = "variant-fields";
+    fields.append(
+      trainingField("Dim", variant, "network_dim"),
+      trainingField("Alpha", variant, "network_alpha"),
+      trainingField("Epochs", variant, "max_train_epochs"),
+      trainingField("LR", variant, "learning_rate", "text"),
+      trainingField("Seed", variant, "seed")
+    );
+
+    const output = document.createElement("div");
+    output.className = "variant-output";
+    output.textContent = `Output: ${previewOutputName(config, variant.run_name)}`;
+
+    row.append(head, fields, output);
+    list.appendChild(row);
+  });
+
+  const count = $("trainingVariantCount");
+  if (count) {
+    count.textContent = `${state.trainingVariants.length} planned run${state.trainingVariants.length === 1 ? "" : "s"}`;
+  }
+  const dryRunAll = $("dryRunAllVariants");
+  if (dryRunAll) {
+    dryRunAll.disabled = state.busy || !state.trainingVariants.length;
+  }
+  const addButton = $("addTrainingVariant");
+  if (addButton) {
+    addButton.disabled = state.busy;
+  }
 }
 
 function renderTimeline() {
@@ -1027,12 +1275,17 @@ function clearProject() {
   closeDatasetReview();
   restoreCompletedActions();
   if (state.config) renderModelInventory(state.config);
+  if (state.config) renderTrainingVariants(state.config);
   renderReadiness();
 }
 
 async function reviewCurrentDataset() {
   const report = state.latestReport || (await refreshReport());
   openDatasetReview(report);
+}
+
+function copyLoraOutput(path) {
+  runAction("copy-to-comfy", { file: path });
 }
 
 function runMissingCaptions() {
@@ -1068,6 +1321,8 @@ function bind() {
   $("saveChangedCaptions").addEventListener("click", saveChangedCaptions);
   $("regenerateMissingCaptions").addEventListener("click", runMissingCaptions);
   $("modelDownloadMissing").addEventListener("click", () => runModelDownload("all"));
+  $("addTrainingVariant").addEventListener("click", addTrainingVariant);
+  $("dryRunAllVariants").addEventListener("click", dryRunAllTrainingVariants);
   document.querySelectorAll("[data-runtime-profile]").forEach((button) => {
     button.addEventListener("click", () => handleRuntimeSelection(button.dataset.runtimeProfile));
   });
@@ -1087,6 +1342,7 @@ function bind() {
     state.projectCleared = false;
     state.latestReport = null;
     renderReadiness();
+    if (state.config) renderTrainingVariants(state.config);
   });
   $("projectName").addEventListener("change", refreshReport);
   $("projectName").addEventListener("change", restoreCompletedActions);

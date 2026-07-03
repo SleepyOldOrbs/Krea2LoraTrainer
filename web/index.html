@@ -18,6 +18,7 @@
           <a href="#setup">Setup</a>
           <a href="#captions">Captions</a>
           <a href="#dataset">Dataset</a>
+          <a href="#training">Training</a>
           <a href="#cache">Cache</a>
           <a href="#output">Output</a>
         </nav>
@@ -191,6 +192,15 @@
               <div><dt>Cache files</dt><dd>-</dd></div>
               <div><dt>Outputs</dt><dd>-</dd></div>
             </dl>
+            <div class="lora-output-section" id="output">
+              <div class="mini-heading">
+                <span>LoRA outputs</span>
+                <strong id="loraOutputCount">0</strong>
+              </div>
+              <div id="loraOutputList" class="lora-output-list">
+                <div class="empty-output">No LoRA outputs found yet.</div>
+              </div>
+            </div>
           </div>
 
           <div class="panel model-panel" id="models">
@@ -210,6 +220,24 @@
                 <span>Experimental</span>
               </button>
             </div>
+          </div>
+
+          <div class="panel training-panel" id="training">
+            <div class="section-heading training-heading">
+              <div>
+                <span class="caption">Training</span>
+                <h3>Variants</h3>
+                <p id="trainingVariantCount">0 planned runs</p>
+              </div>
+              <div class="training-actions">
+                <button id="addTrainingVariant" class="ghost compact" type="button">Add Variant</button>
+                <button id="dryRunAllVariants" class="compact" type="button">Dry Run All</button>
+              </div>
+            </div>
+            <div class="training-note">
+              Each variant gets a unique output name. Dry runs print the exact musubi command without starting training.
+            </div>
+            <div id="trainingVariants" class="training-list" aria-live="polite"></div>
           </div>
         </section>
 

@@ -23,6 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover - only hit on Python < 3.11
 
 IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 WINDOWS_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)")
+SAFE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 VLM_CAPTION_SCRIPT = r"""
 import argparse
 import json
@@ -319,9 +320,49 @@ def quote(value: str | os.PathLike[str]) -> str:
     return shlex.quote(str(value))
 
 
-def output_name(config: AppConfig, project: ProjectPaths) -> str:
+def windows_sort_key(value: str | os.PathLike[str]) -> tuple[tuple[int, object], ...]:
+    parts = re.split(r"(\d+)", str(value).replace("\\", "/"))
+    key: list[tuple[int, object]] = []
+    for part in parts:
+        if not part:
+            continue
+        if part.isdigit():
+            key.append((0, int(part)))
+        else:
+            key.append((1, part.casefold()))
+    return tuple(key)
+
+
+def windows_sorted_paths(paths: list[Path] | tuple[Path, ...], root: Path | None = None) -> list[Path]:
+    if root is None:
+        return sorted(paths, key=lambda path: windows_sort_key(path.name))
+    return sorted(paths, key=lambda path: windows_sort_key(path.relative_to(root).as_posix()))
+
+
+def validate_simple_name(name: str, label: str) -> str:
+    if not name or not SAFE_NAME_RE.fullmatch(name):
+        raise ValueError(f"{label} may contain letters, numbers, dots, underscores, and hyphens")
+    if "/" in name or "\\" in name or Path(name).is_absolute():
+        raise ValueError(f"{label} must be a simple name, not a path")
+    return name
+
+
+def output_name(config: AppConfig, project: ProjectPaths, run_name: str = "", exact_output_name: str = "") -> str:
+    if exact_output_name:
+        return validate_simple_name(exact_output_name, "output name")
     template = str(config.training["output_name_template"])
-    return template.format(project=project.name)
+    safe_run = validate_simple_name(run_name, "run name") if run_name else ""
+    rendered = template.format(project=project.name, run=safe_run)
+    if safe_run and "{run" not in template:
+        rendered = f"{rendered}_{safe_run}"
+    return validate_simple_name(rendered, "output name")
+
+
+def training_settings(config: AppConfig, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    settings = dict(config.training)
+    if overrides:
+        settings.update({key: value for key, value in overrides.items() if value is not None})
+    return settings
 
 
 def local_dir_for_hf_file(target: Path, hf_file: str) -> Path:
@@ -521,8 +562,14 @@ def command_cache_text(config: AppConfig, project: ProjectPaths) -> str:
     return activation_script(config) + "\n" + " ".join(quote(arg) for arg in args)
 
 
-def command_train(config: AppConfig, project: ProjectPaths) -> str:
-    train = config.training
+def command_train(
+    config: AppConfig,
+    project: ProjectPaths,
+    run_name: str = "",
+    exact_output_name: str = "",
+    training_overrides: dict[str, Any] | None = None,
+) -> str:
+    train = training_settings(config, training_overrides)
     args = [
         "accelerate",
         "launch",
@@ -569,7 +616,7 @@ def command_train(config: AppConfig, project: ProjectPaths) -> str:
         "--output_dir",
         str(project.output),
         "--output_name",
-        output_name(config, project),
+        output_name(config, project, run_name, exact_output_name),
         "--fp8_base",
         "--fp8_scaled",
         "--blocks_to_swap",
@@ -674,10 +721,13 @@ def print_checks(checks: list[CheckResult]) -> int:
 def list_images(images_dir: Path) -> list[Path]:
     if not images_dir.is_dir():
         return []
-    return sorted(
-        path
-        for path in images_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    return windows_sorted_paths(
+        [
+            path
+            for path in images_dir.rglob("*")
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+        ],
+        images_dir,
     )
 
 
@@ -704,8 +754,17 @@ def dataset_report_data(project: ProjectPaths) -> dict[str, Any]:
         if image.with_suffix(".txt").exists()
         and not image.with_suffix(".txt").read_text(encoding="utf-8", errors="ignore").strip()
     ]
-    outputs = sorted(project.output.glob("*.safetensors")) if project.output.is_dir() else []
+    outputs = windows_sorted_paths(list(project.output.glob("*.safetensors"))) if project.output.is_dir() else []
     latest = max(outputs, key=lambda path: path.stat().st_mtime) if outputs else None
+    lora_outputs = [
+        {
+            "name": output.name,
+            "path": str(output),
+            "size_bytes": output.stat().st_size,
+            "modified": output.stat().st_mtime,
+        }
+        for output in sorted(outputs, key=lambda path: (-path.stat().st_mtime, windows_sort_key(path.name)))
+    ]
     return {
         "project": project.name,
         "project_root": str(project.root),
@@ -717,6 +776,7 @@ def dataset_report_data(project: ProjectPaths) -> dict[str, Any]:
         else 0,
         "lora_output_count": len(outputs),
         "latest_lora": str(latest) if latest else None,
+        "lora_outputs": lora_outputs,
         "ok": not any(check.level == "error" for check in checks),
     }
 
@@ -1255,6 +1315,24 @@ def cache_text(args: argparse.Namespace) -> int:
     return run_script(command_cache_text(config, project), args.dry_run)
 
 
+def train_overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    fields = {
+        "network_dim": "network_dim",
+        "network_alpha": "network_alpha",
+        "max_train_epochs": "max_train_epochs",
+        "save_every_n_epochs": "save_every_n_epochs",
+        "learning_rate": "learning_rate",
+        "seed": "seed",
+        "blocks_to_swap": "blocks_to_swap",
+    }
+    overrides: dict[str, Any] = {}
+    for attr, key in fields.items():
+        value = getattr(args, attr, None)
+        if value is not None:
+            overrides[key] = value
+    return overrides
+
+
 def train(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     project = project_paths(config, args.project_name)
@@ -1263,7 +1341,16 @@ def train(args: argparse.Namespace) -> int:
         env_rc = print_checks(env_checks(config))
         if dataset_rc or env_rc:
             return 1
-    return run_script(command_train(config, project), args.dry_run)
+    return run_script(
+        command_train(
+            config,
+            project,
+            run_name=getattr(args, "run_name", "") or "",
+            exact_output_name=getattr(args, "output_name", "") or "",
+            training_overrides=train_overrides_from_args(args),
+        ),
+        args.dry_run,
+    )
 
 
 def latest_lora(output_dir: Path) -> Path | None:
@@ -1416,6 +1503,20 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("project_name")
         command.add_argument("--dry-run", action="store_true", help="Print the command script without executing it.")
         command.add_argument("--skip-checks", action="store_true", help="Skip dataset/env preflight checks.")
+        if name == "train":
+            command.add_argument("--run-name", default="", help="Safe suffix for this training run output name.")
+            command.add_argument("--output-name", default="", help="Exact safe musubi output name for this run.")
+            command.add_argument("--network-dim", type=int, help="Override training.network_dim for this run.")
+            command.add_argument("--network-alpha", type=int, help="Override training.network_alpha for this run.")
+            command.add_argument("--max-train-epochs", type=int, help="Override training.max_train_epochs for this run.")
+            command.add_argument(
+                "--save-every-n-epochs",
+                type=int,
+                help="Override training.save_every_n_epochs for this run.",
+            )
+            command.add_argument("--learning-rate", help="Override training.learning_rate for this run.")
+            command.add_argument("--seed", type=int, help="Override training.seed for this run.")
+            command.add_argument("--blocks-to-swap", type=int, help="Override training.blocks_to_swap for this run.")
         command.set_defaults(func=handler)
 
     copy = sub.add_parser("copy-to-comfy", help="Copy the latest or selected LoRA to the ComfyUI LoRA folder.")
