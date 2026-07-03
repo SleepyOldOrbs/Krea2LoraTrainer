@@ -128,6 +128,28 @@ From Windows PowerShell:
 .\scripts\run-wizard-wsl.ps1 jagmoon --source-dir C:\Temp\JAG --trigger "jagmoon style"
 ```
 
+## Local web app
+
+Run the localhost dashboard from WSL:
+
+```bash
+python3 web_app.py --host 127.0.0.1 --port 8765
+```
+
+From Windows PowerShell:
+
+```powershell
+.\scripts\run-web-wsl.ps1
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8765/
+```
+
+The web app is a local-only operational dashboard for the same helper commands. It can validate the environment, verify models, initialize projects, import images, show dataset reports, dry-run cache/train commands, run cache steps, and copy the latest LoRA to ComfyUI. The training action is guarded by the backend and defaults to `--dry-run`.
+
 ## Commands
 
 - `show-config`: print resolved path, dataset, and training settings

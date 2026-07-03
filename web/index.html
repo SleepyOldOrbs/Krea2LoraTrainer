@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Krea2 LoRA Helper</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div>
+          <h1>Krea2 LoRA Helper</h1>
+          <p>Local musubi-tuner workflow control</p>
+        </div>
+        <nav class="nav-list" aria-label="Workflow">
+          <a href="#setup">Setup</a>
+          <a href="#dataset">Dataset</a>
+          <a href="#cache">Cache</a>
+          <a href="#output">Output</a>
+        </nav>
+        <div class="side-note">
+          <strong>Safety default</strong>
+          <span>Training buttons render dry-run commands unless explicitly confirmed in the backend.</span>
+        </div>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <div>
+            <span class="caption">Localhost</span>
+            <h2>Project Control</h2>
+          </div>
+          <div class="status-strip" id="statusStrip"></div>
+        </header>
+
+        <section class="panel controls" id="setup">
+          <div class="field">
+            <label for="projectName">Project</label>
+            <input id="projectName" list="projectList" placeholder="jagmoon" autocomplete="off">
+            <datalist id="projectList"></datalist>
+          </div>
+          <div class="field wide">
+            <label for="sourceDir">Source images</label>
+            <input id="sourceDir" value="/mnt/c/Temp/JAG" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="trigger">Trigger</label>
+            <input id="trigger" value="jagmoon style" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="mode">Import mode</label>
+            <select id="mode">
+              <option value="symlink">Symlink</option>
+              <option value="copy">Copy</option>
+              <option value="hardlink">Hardlink</option>
+            </select>
+          </div>
+        </section>
+
+        <section class="grid">
+          <div class="panel workflow">
+            <div class="section-heading">
+              <span class="caption">Actions</span>
+              <h3>Workflow</h3>
+            </div>
+            <div class="action-list">
+              <button data-action="validate-env">Validate Environment</button>
+              <button data-action="download-models">Verify Models</button>
+              <button data-action="init-project">Init Project</button>
+              <button data-action="import-images">Import Images</button>
+              <button data-action="dataset-report">Dataset Report</button>
+              <button data-action="cache-latents-dry">Dry Run Latents</button>
+              <button data-action="cache-text-dry">Dry Run Text Cache</button>
+              <button data-action="train-dry" class="primary">Train Dry Run</button>
+              <button data-action="cache-latents">Run Latent Cache</button>
+              <button data-action="cache-text">Run Text Cache</button>
+              <button data-action="copy-to-comfy">Copy To ComfyUI</button>
+            </div>
+          </div>
+
+          <div class="panel report" id="dataset">
+            <div class="section-heading">
+              <span class="caption">Dataset</span>
+              <h3>Current Project</h3>
+            </div>
+            <dl id="reportGrid" class="report-grid">
+              <div><dt>Images</dt><dd>-</dd></div>
+              <div><dt>Captions</dt><dd>-</dd></div>
+              <div><dt>Cache files</dt><dd>-</dd></div>
+              <div><dt>Outputs</dt><dd>-</dd></div>
+            </dl>
+          </div>
+        </section>
+
+        <section class="panel console-panel" id="cache">
+          <div class="console-head">
+            <div>
+              <span class="caption">Command Output</span>
+              <h3>Run Log</h3>
+            </div>
+            <button id="clearLog" class="ghost">Clear</button>
+          </div>
+          <pre id="consoleLog" aria-live="polite">Ready.</pre>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>
