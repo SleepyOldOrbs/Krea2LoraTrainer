@@ -140,6 +140,48 @@ def project_names(config: krea2_lora.AppConfig) -> list[str]:
     return sorted(path.name for path in root.iterdir() if path.is_dir())
 
 
+def caption_status(caption: Path) -> tuple[str, str]:
+    if not caption.exists():
+        return "missing", ""
+    text = caption.read_text(encoding="utf-8", errors="ignore").strip()
+    if not text:
+        return "empty", ""
+    return "ready", text
+
+
+def dataset_review_items(project: krea2_lora.ProjectPaths) -> list[dict[str, object]]:
+    items: list[dict[str, object]] = []
+    for image in krea2_lora.list_images(project.images):
+        caption = image.with_suffix(".txt")
+        status, text = caption_status(caption)
+        relative = image.relative_to(project.images).as_posix()
+        items.append(
+            {
+                "file_name": image.name,
+                "relative_path": relative,
+                "caption_file": caption.name,
+                "caption": text,
+                "caption_status": status,
+                "size_bytes": image.stat().st_size,
+            }
+        )
+    return items
+
+
+def safe_project_image(config: krea2_lora.AppConfig, project: str, image: str) -> Path:
+    require_project(project)
+    if not image:
+        raise ValueError("image is required")
+    paths = krea2_lora.project_paths(config, project)
+    relative = Path(image.replace("\\", "/"))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("image path must stay inside the project image folder")
+    target = paths.images / relative
+    if target.suffix.lower() not in krea2_lora.IMAGE_EXTENSIONS:
+        raise ValueError("unsupported image type")
+    return target
+
+
 class Handler(BaseHTTPRequestHandler):
     state: WebState
 
@@ -151,6 +193,11 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             project = query.get("project", [""])[0]
             self.send_json(self.report_payload(project))
+        elif parsed.path == "/api/image":
+            query = parse_qs(parsed.query)
+            project = query.get("project", [""])[0]
+            image = query.get("image", [""])[0]
+            self.serve_project_image(project, image)
         elif parsed.path.startswith("/api/"):
             self.send_json({"error": "Unknown API route"}, HTTPStatus.NOT_FOUND)
         else:
@@ -194,7 +241,28 @@ class Handler(BaseHTTPRequestHandler):
         require_project(project)
         config = krea2_lora.load_config(self.state.config)
         paths = krea2_lora.project_paths(config, project)
-        return krea2_lora.dataset_report_data(paths)
+        report = krea2_lora.dataset_report_data(paths)
+        report["review_items"] = dataset_review_items(paths)
+        return report
+
+    def serve_project_image(self, project: str, image: str) -> None:
+        try:
+            config = krea2_lora.load_config(self.state.config)
+            target = safe_project_image(config, project, image)
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if not target.is_file():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        body = target.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def serve_static(self, request_path: str) -> None:
         relative = "index.html" if request_path in {"", "/"} else request_path.lstrip("/")

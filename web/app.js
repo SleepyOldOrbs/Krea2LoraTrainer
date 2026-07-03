@@ -3,6 +3,7 @@ const state = {
   busy: false,
   projectCleared: false,
   captionDefaultsLoaded: false,
+  latestReport: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -155,6 +156,7 @@ function renderStatus(checks) {
 }
 
 function renderReport(report) {
+  state.latestReport = report;
   const items = [
     ["Images", `${report.images.image_count} / ${report.images.total_mb} MB`],
     ["Captions", `${report.missing_caption_count} missing, ${report.empty_caption_count} empty`],
@@ -188,13 +190,95 @@ async function refreshConfig() {
 
 async function refreshReport() {
   const project = values().project;
-  if (!project) return;
+  if (!project) return null;
   try {
     const report = await getJSON(`/api/report?project=${encodeURIComponent(project)}`);
     renderReport(report);
+    return report;
   } catch (error) {
     appendLog(`Report unavailable: ${error.message}`);
+    return null;
   }
+}
+
+function imageUrl(report, item) {
+  const params = new URLSearchParams({
+    project: report.project,
+    image: item.relative_path,
+  });
+  return `/api/image?${params.toString()}`;
+}
+
+function captionStateLabel(status) {
+  if (status === "ready") return "Ready";
+  if (status === "empty") return "Empty";
+  return "Missing";
+}
+
+function renderDatasetReview(report) {
+  const list = $("datasetReviewList");
+  const items = report?.review_items || [];
+  const ready = items.filter((item) => item.caption_status === "ready").length;
+  const missing = items.filter((item) => item.caption_status === "missing").length;
+  const empty = items.filter((item) => item.caption_status === "empty").length;
+  $("datasetModalTitle").textContent = `${report.project} image set`;
+  $("datasetModalMeta").textContent =
+    `${items.length} images. ${ready} captions ready, ${missing} missing, ${empty} empty.`;
+  list.innerHTML = "";
+  if (!items.length) {
+    const emptyMessage = document.createElement("div");
+    emptyMessage.className = "empty-review";
+    emptyMessage.textContent = "No project images were found for review.";
+    list.appendChild(emptyMessage);
+    return;
+  }
+
+  items.forEach((item) => {
+    const row = document.createElement("article");
+    row.className = "review-item";
+
+    const thumb = document.createElement("div");
+    thumb.className = "review-thumb";
+    const image = document.createElement("img");
+    image.src = imageUrl(report, item);
+    image.alt = item.file_name;
+    image.loading = "lazy";
+    thumb.appendChild(image);
+
+    const copy = document.createElement("div");
+    copy.className = "review-copy";
+    const meta = document.createElement("div");
+    meta.className = "review-meta";
+    const name = document.createElement("div");
+    name.className = "review-name";
+    name.textContent = item.file_name;
+    const status = document.createElement("span");
+    status.className = `caption-state ${item.caption_status}`;
+    status.textContent = captionStateLabel(item.caption_status);
+    meta.append(name, status);
+
+    const caption = document.createElement("p");
+    caption.className = "review-caption";
+    caption.textContent =
+      item.caption || (item.caption_status === "empty" ? "Caption file exists but is empty." : "No caption file found.");
+    copy.append(meta, caption);
+    row.append(thumb, copy);
+    list.appendChild(row);
+  });
+}
+
+function openDatasetReview(report) {
+  if (!report) {
+    setRunSummary("Run Dataset Report before reviewing the image set.", "warn");
+    return;
+  }
+  renderDatasetReview(report);
+  $("datasetModal").hidden = false;
+  $("closeDatasetModal").focus();
+}
+
+function closeDatasetReview() {
+  $("datasetModal").hidden = true;
 }
 
 function payloadFor(action) {
@@ -280,7 +364,10 @@ async function runAction(action) {
     const summary = summarizeResult(action, result);
     setRunSummary(summary.text, summary.level);
     await refreshConfig();
-    await refreshReport();
+    const report = await refreshReport();
+    if (action === "dataset-report") {
+      openDatasetReview(report);
+    }
   } catch (error) {
     markActionComplete(action, false);
     setRunSummary(`${ACTION_TITLES[action] || "Action"} could not start: ${error.message}`, "error");
@@ -334,9 +421,16 @@ function clearProject() {
   $("sourcePickerStatus").textContent = "Use the WSL path the server can read, for example /mnt/c/Temp/JAG.";
   updateModeHelp();
   resetReport();
+  state.latestReport = null;
   $("consoleLog").textContent = "Ready.";
   setRunSummary("Project fields cleared. Workflow ticks were reset. No files were deleted.", "ok");
+  closeDatasetReview();
   restoreCompletedActions();
+}
+
+async function reviewCurrentDataset() {
+  const report = state.latestReport || (await refreshReport());
+  openDatasetReview(report);
 }
 
 function bind() {
@@ -348,8 +442,17 @@ function bind() {
     setRunSummary("Run log cleared. Workflow state is unchanged.", "neutral");
   });
   $("clearProject").addEventListener("click", clearProject);
+  $("reviewDataset").addEventListener("click", reviewCurrentDataset);
+  $("closeDatasetModal").addEventListener("click", closeDatasetReview);
+  $("datasetModal").addEventListener("click", (event) => {
+    if (event.target === $("datasetModal")) closeDatasetReview();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("datasetModal").hidden) closeDatasetReview();
+  });
   $("projectName").addEventListener("input", () => {
     state.projectCleared = false;
+    state.latestReport = null;
   });
   $("projectName").addEventListener("change", refreshReport);
   $("projectName").addEventListener("change", restoreCompletedActions);

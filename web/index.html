@@ -155,8 +155,11 @@
 
           <div class="panel report" id="dataset">
             <div class="section-heading">
-              <span class="caption">Dataset</span>
-              <h3>Current Project</h3>
+              <div>
+                <span class="caption">Dataset</span>
+                <h3>Current Project</h3>
+              </div>
+              <button id="reviewDataset" class="ghost compact" type="button">Review Image Set</button>
             </div>
             <dl id="reportGrid" class="report-grid">
               <div><dt>Images</dt><dd>-</dd></div>
@@ -179,6 +182,20 @@
           <pre id="consoleLog" aria-live="polite">Ready.</pre>
         </section>
       </main>
+    </div>
+
+    <div id="datasetModal" class="modal-backdrop" hidden>
+      <section class="dataset-modal" role="dialog" aria-modal="true" aria-labelledby="datasetModalTitle">
+        <header class="modal-head">
+          <div>
+            <span class="caption">Dataset inspection</span>
+            <h3 id="datasetModalTitle">Image set and captions</h3>
+            <p id="datasetModalMeta">Run Dataset Report to review images and captions.</p>
+          </div>
+          <button id="closeDatasetModal" class="ghost compact" type="button" aria-label="Close dataset review">Close</button>
+        </header>
+        <div id="datasetReviewList" class="review-list"></div>
+      </section>
     </div>
     <script src="/app.js"></script>
   </body>

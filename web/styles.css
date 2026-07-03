@@ -263,6 +263,13 @@ input[type="checkbox"] {
   margin-bottom: 14px;
 }
 
+.report .section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .action-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -304,6 +311,12 @@ button.primary:hover {
 button.ghost {
   min-height: 34px;
   color: var(--muted);
+}
+
+button.compact {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
 }
 
 button:disabled {
@@ -480,6 +493,160 @@ pre {
   white-space: pre-wrap;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(18, 25, 31, 0.58);
+}
+
+.modal-backdrop[hidden] {
+  display: none;
+}
+
+.dataset-modal {
+  width: min(1120px, 100%);
+  max-height: min(860px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid #cfd8df;
+  border-radius: 8px;
+  background: #fbfcfd;
+  box-shadow: 0 22px 60px rgba(10, 18, 24, 0.28);
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+  background: #fff;
+}
+
+.modal-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.review-list {
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+  padding: 14px;
+  background:
+    linear-gradient(90deg, rgba(36, 120, 95, 0.08) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(36, 120, 95, 0.06) 1px, transparent 1px),
+    #f4f7f9;
+  background-size: 28px 28px;
+}
+
+.review-item {
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.review-thumb {
+  min-height: 138px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid #cfd8df;
+  border-radius: 6px;
+  background: #101820;
+}
+
+.review-thumb img {
+  width: 100%;
+  height: 100%;
+  max-height: 180px;
+  display: block;
+  object-fit: contain;
+}
+
+.review-copy {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+}
+
+.review-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.review-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.caption-state {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--panel-soft);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.caption-state.ready {
+  color: var(--accent-dark);
+  border-color: #b8d8cc;
+  background: #edf8f4;
+}
+
+.caption-state.empty,
+.caption-state.missing {
+  color: var(--danger);
+  border-color: #efb6b6;
+  background: #fff1f1;
+}
+
+.review-caption {
+  min-height: 88px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid #dbe3e9;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.empty-review {
+  padding: 18px;
+  border: 1px dashed #b7c5d0;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-weight: 700;
+}
+
 @media (max-width: 960px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -514,6 +681,10 @@ pre {
 
   .caption-controls {
     grid-template-columns: 1fr;
+  }
+
+  .review-item {
+    grid-template-columns: 140px minmax(0, 1fr);
   }
 }
 
@@ -564,5 +735,23 @@ pre {
 
   .input-row {
     grid-template-columns: 1fr;
+  }
+
+  .modal-backdrop {
+    padding: 10px;
+  }
+
+  .modal-head,
+  .review-meta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .review-item {
+    grid-template-columns: 1fr;
+  }
+
+  .review-thumb {
+    min-height: 180px;
   }
 }
