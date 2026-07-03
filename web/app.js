@@ -4,6 +4,7 @@ const state = {
   projectCleared: false,
   captionDefaultsLoaded: false,
   latestReport: null,
+  reviewFilter: "all",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -215,15 +216,87 @@ function captionStateLabel(status) {
   return "Missing";
 }
 
-function renderDatasetReview(report) {
-  const list = $("datasetReviewList");
-  const items = report?.review_items || [];
+function captionStateText(item) {
+  if (item.caption) return item.caption;
+  if (item.caption_status === "empty") return "Caption file exists but is empty.";
+  return "No caption file found.";
+}
+
+function reviewCounts(items) {
   const ready = items.filter((item) => item.caption_status === "ready").length;
   const missing = items.filter((item) => item.caption_status === "missing").length;
   const empty = items.filter((item) => item.caption_status === "empty").length;
+  return {
+    total: items.length,
+    ready,
+    missing,
+    empty,
+    needs: missing + empty,
+  };
+}
+
+function filteredReviewItems(items) {
+  if (state.reviewFilter === "ready") {
+    return items.filter((item) => item.caption_status === "ready");
+  }
+  if (state.reviewFilter === "needs") {
+    return items.filter((item) => item.caption_status !== "ready");
+  }
+  return items;
+}
+
+function formatBytes(sizeBytes) {
+  const bytes = Number(sizeBytes);
+  if (!Number.isFinite(bytes)) return "Size unknown";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderDatasetSummary(counts) {
+  const summary = $("datasetReviewSummary");
+  summary.innerHTML = "";
+  [
+    ["Images", counts.total, "neutral"],
+    ["Ready", counts.ready, "ready"],
+    ["Missing", counts.missing, "missing"],
+    ["Empty", counts.empty, "empty"],
+  ].forEach(([label, value, tone]) => {
+    const chip = document.createElement("span");
+    chip.className = `review-chip ${tone}`;
+    const chipLabel = document.createElement("span");
+    chipLabel.textContent = label;
+    const chipValue = document.createElement("strong");
+    chipValue.textContent = value;
+    chip.append(chipLabel, chipValue);
+    summary.appendChild(chip);
+  });
+}
+
+function updateReviewFilters(counts) {
+  const labels = {
+    all: `All ${counts.total}`,
+    ready: `Ready ${counts.ready}`,
+    needs: `Needs attention ${counts.needs}`,
+  };
+  document.querySelectorAll(".review-filter").forEach((button) => {
+    const active = button.dataset.filter === state.reviewFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+    button.textContent = labels[button.dataset.filter] || button.textContent;
+  });
+}
+
+function renderDatasetReview(report) {
+  const list = $("datasetReviewList");
+  const items = report?.review_items || [];
+  const counts = reviewCounts(items);
+  const visibleItems = filteredReviewItems(items);
   $("datasetModalTitle").textContent = `${report.project} image set`;
   $("datasetModalMeta").textContent =
-    `${items.length} images. ${ready} captions ready, ${missing} missing, ${empty} empty.`;
+    `${counts.total} images. ${counts.ready} captions ready, ${counts.missing} missing, ${counts.empty} empty.`;
+  renderDatasetSummary(counts);
+  updateReviewFilters(counts);
   list.innerHTML = "";
   if (!items.length) {
     const emptyMessage = document.createElement("div");
@@ -233,9 +306,20 @@ function renderDatasetReview(report) {
     return;
   }
 
-  items.forEach((item) => {
+  if (!visibleItems.length) {
+    const emptyMessage = document.createElement("div");
+    emptyMessage.className = "empty-review";
+    emptyMessage.textContent =
+      state.reviewFilter === "needs"
+        ? "No images need caption attention."
+        : "No project images match this filter.";
+    list.appendChild(emptyMessage);
+    return;
+  }
+
+  visibleItems.forEach((item) => {
     const row = document.createElement("article");
-    row.className = "review-item";
+    row.className = `review-item ${item.caption_status === "ready" ? "" : "needs-attention"}`.trim();
 
     const thumb = document.createElement("div");
     thumb.className = "review-thumb";
@@ -257,11 +341,16 @@ function renderDatasetReview(report) {
     status.textContent = captionStateLabel(item.caption_status);
     meta.append(name, status);
 
+    const submeta = document.createElement("div");
+    submeta.className = "review-submeta";
+    const position = String(items.indexOf(item) + 1).padStart(2, "0");
+    const total = String(items.length).padStart(2, "0");
+    submeta.textContent = `${position} / ${total} | ${item.caption_file} | ${formatBytes(item.size_bytes)}`;
+
     const caption = document.createElement("p");
     caption.className = "review-caption";
-    caption.textContent =
-      item.caption || (item.caption_status === "empty" ? "Caption file exists but is empty." : "No caption file found.");
-    copy.append(meta, caption);
+    caption.textContent = captionStateText(item);
+    copy.append(meta, submeta, caption);
     row.append(thumb, copy);
     list.appendChild(row);
   });
@@ -422,6 +511,7 @@ function clearProject() {
   updateModeHelp();
   resetReport();
   state.latestReport = null;
+  state.reviewFilter = "all";
   $("consoleLog").textContent = "Ready.";
   setRunSummary("Project fields cleared. Workflow ticks were reset. No files were deleted.", "ok");
   closeDatasetReview();
@@ -444,6 +534,12 @@ function bind() {
   $("clearProject").addEventListener("click", clearProject);
   $("reviewDataset").addEventListener("click", reviewCurrentDataset);
   $("closeDatasetModal").addEventListener("click", closeDatasetReview);
+  document.querySelectorAll(".review-filter").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.reviewFilter = button.dataset.filter || "all";
+      if (state.latestReport) renderDatasetReview(state.latestReport);
+    });
+  });
   $("datasetModal").addEventListener("click", (event) => {
     if (event.target === $("datasetModal")) closeDatasetReview();
   });

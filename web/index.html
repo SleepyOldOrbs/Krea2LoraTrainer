@@ -194,6 +194,14 @@
           </div>
           <button id="closeDatasetModal" class="ghost compact" type="button" aria-label="Close dataset review">Close</button>
         </header>
+        <div class="review-toolbar" aria-label="Dataset review controls">
+          <div id="datasetReviewSummary" class="review-summary"></div>
+          <div class="review-filters" role="group" aria-label="Filter dataset review">
+            <button class="review-filter active" type="button" data-filter="all">All</button>
+            <button class="review-filter" type="button" data-filter="ready">Ready</button>
+            <button class="review-filter" type="button" data-filter="needs">Needs attention</button>
+          </div>
+        </div>
         <div id="datasetReviewList" class="review-list"></div>
       </section>
     </div>
