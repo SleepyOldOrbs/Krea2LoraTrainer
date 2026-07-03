@@ -68,6 +68,13 @@ This creates:
 
 Place training images in `~/krea2_loras/jagmoon/images/`. Each image needs a matching `.txt` caption with the same basename.
 
+Or import/link a prepared image folder:
+
+```bash
+python krea2_lora.py import-images jagmoon /mnt/c/Temp/JAG --mode symlink --trigger "jagmoon style"
+python krea2_lora.py dataset-report jagmoon
+```
+
 Create caption stubs:
 
 ```bash
@@ -109,6 +116,8 @@ python krea2_lora.py status jagmoon
 - `init-project PROJECT_NAME`: create project folders, `dataset.toml`, `paths.env`, and `train_krea2.sh`
 - `validate-env`: check musubi, venvs, required model files, project root, and ComfyUI destination
 - `check-dataset PROJECT_NAME`: ensure images exist and every image has a non-empty matching caption
+- `import-images PROJECT_NAME SOURCE_DIR`: copy, symlink, or hardlink images into the project
+- `dataset-report PROJECT_NAME`: summarize image size/counts, caption state, cache files, and outputs
 - `create-caption-stubs PROJECT_NAME --trigger "...":` create or fill missing/empty captions
 - `cache-latents PROJECT_NAME`: run `krea2_cache_latents.py`
 - `cache-text PROJECT_NAME`: run `krea2_cache_text_encoder_outputs.py`

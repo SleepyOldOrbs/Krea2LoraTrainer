@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import json
 import shlex
 import shutil
 import subprocess
@@ -21,6 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - only hit on Python < 3.11
 
 
 IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
+WINDOWS_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)")
 
 DEFAULT_CONFIG: dict[str, dict[str, Any]] = {
     "paths": {
@@ -90,6 +92,16 @@ class CheckResult:
 def expand_path(value: str | os.PathLike[str]) -> Path:
     expanded = os.path.expandvars(os.path.expanduser(str(value)))
     return Path(expanded)
+
+
+def cli_path(value: str | os.PathLike[str]) -> Path:
+    raw = str(value)
+    match = WINDOWS_PATH_RE.match(raw)
+    if os.name == "posix" and match:
+        drive = match.group(1).lower()
+        tail = match.group(2).replace("\\", "/")
+        return Path(f"/mnt/{drive}/{tail}")
+    return expand_path(raw)
 
 
 def deep_merge(base: dict[str, dict[str, Any]], override: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -479,6 +491,60 @@ def list_images(images_dir: Path) -> list[Path]:
     )
 
 
+def image_summary(images: list[Path], root: Path) -> dict[str, Any]:
+    total_bytes = sum(path.stat().st_size for path in images)
+    return {
+        "root": str(root),
+        "image_count": len(images),
+        "total_bytes": total_bytes,
+        "total_mb": round(total_bytes / 1024 / 1024, 2),
+        "extensions": {
+            ext: sum(1 for image in images if image.suffix.lower() == ext)
+            for ext in sorted({image.suffix.lower() for image in images})
+        },
+    }
+
+
+def dataset_report_data(project: ProjectPaths) -> dict[str, Any]:
+    checks, images = dataset_checks(project)
+    missing = [image.with_suffix(".txt") for image in images if not image.with_suffix(".txt").exists()]
+    empty = [
+        image.with_suffix(".txt")
+        for image in images
+        if image.with_suffix(".txt").exists()
+        and not image.with_suffix(".txt").read_text(encoding="utf-8", errors="ignore").strip()
+    ]
+    outputs = sorted(project.output.glob("*.safetensors")) if project.output.is_dir() else []
+    latest = max(outputs, key=lambda path: path.stat().st_mtime) if outputs else None
+    return {
+        "project": project.name,
+        "project_root": str(project.root),
+        "images": image_summary(images, project.images),
+        "missing_caption_count": len(missing),
+        "empty_caption_count": len(empty),
+        "cache_file_count": sum(1 for item in project.cache.rglob("*") if item.is_file())
+        if project.cache.is_dir()
+        else 0,
+        "lora_output_count": len(outputs),
+        "latest_lora": str(latest) if latest else None,
+        "ok": not any(check.level == "error" for check in checks),
+    }
+
+
+def print_dataset_report(report: dict[str, Any]) -> None:
+    print(f"Project: {report['project']}")
+    print(f"Root: {report['project_root']}")
+    print(f"Images: {report['images']['image_count']} ({report['images']['total_mb']} MB)")
+    print(f"Extensions: {report['images']['extensions']}")
+    print(f"Missing captions: {report['missing_caption_count']}")
+    print(f"Empty captions: {report['empty_caption_count']}")
+    print(f"Cache files: {report['cache_file_count']}")
+    print(f"LoRA outputs: {report['lora_output_count']}")
+    if report["latest_lora"]:
+        print(f"Latest LoRA: {report['latest_lora']}")
+    print(f"Dataset OK: {report['ok']}")
+
+
 def dataset_checks(project: ProjectPaths) -> tuple[list[CheckResult], list[Path]]:
     checks: list[CheckResult] = []
 
@@ -619,6 +685,62 @@ def create_caption_stubs(args: argparse.Namespace) -> int:
     return 0
 
 
+def import_images(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    project = project_paths(config, args.project_name)
+    source_dir = cli_path(args.source_dir)
+    if not source_dir.is_dir():
+        print(f"Source directory does not exist: {source_dir}")
+        return 1
+    project.images.mkdir(parents=True, exist_ok=True)
+    images = list_images(source_dir)
+    if not images:
+        print(f"No supported images found in {source_dir}")
+        return 1
+
+    imported = 0
+    skipped = 0
+    for source in images:
+        dest = project.images / source.name
+        if dest.exists() and not args.force:
+            skipped += 1
+        else:
+            if dest.exists() or dest.is_symlink():
+                dest.unlink()
+            if args.mode == "copy":
+                shutil.copy2(source, dest)
+            elif args.mode == "symlink":
+                dest.symlink_to(source)
+            elif args.mode == "hardlink":
+                os.link(source, dest)
+            else:  # pragma: no cover - argparse enforces choices
+                raise ValueError(f"Unsupported import mode: {args.mode}")
+            imported += 1
+
+        if args.trigger:
+            caption = dest.with_suffix(".txt")
+            if args.force_caption or not caption.exists() or not caption.read_text(encoding="utf-8", errors="ignore").strip():
+                caption.write_text(args.trigger.strip() + "\n", encoding="utf-8", newline="\n")
+
+    print(f"Imported {imported} images from {source_dir} using {args.mode}. Skipped {skipped}.")
+    if args.trigger:
+        print("Caption stubs were created or filled from --trigger.")
+    return 0
+
+
+def dataset_report(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    project = project_paths(config, args.project_name)
+    report = dataset_report_data(project)
+    print_dataset_report(report)
+    if args.json:
+        destination = cli_path(args.json)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        print(f"Wrote JSON report: {destination}")
+    return 0 if report["ok"] else 1
+
+
 def cache_latents(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     project = project_paths(config, args.project_name)
@@ -689,15 +811,15 @@ def status(args: argparse.Namespace) -> int:
     print(f"Project: {project.root}")
     checks, images = dataset_checks(project)
     print_checks(checks)
-    cache_count = sum(1 for item in project.cache.rglob("*") if item.is_file()) if project.cache.is_dir() else 0
-    outputs = sorted(project.output.glob("*.safetensors")) if project.output.is_dir() else []
-    print(f"Cache files: {cache_count}")
-    print(f"LoRA outputs: {len(outputs)}")
-    if outputs:
-        latest = max(outputs, key=lambda path: path.stat().st_mtime)
+    report = dataset_report_data(project)
+    print(f"Image bytes: {report['images']['total_bytes']} ({report['images']['total_mb']} MB)")
+    print(f"Cache files: {report['cache_file_count']}")
+    print(f"LoRA outputs: {report['lora_output_count']}")
+    if report["latest_lora"]:
+        latest = Path(str(report["latest_lora"]))
         print(f"Latest LoRA: {latest}")
         print(f"Comfy target: {config.paths['comfy_lora_dir'] / latest.name}")
-    if images and not outputs:
+    if images and not report["lora_output_count"]:
         print("Next likely steps: cache-latents, cache-text, train")
     return 0
 
@@ -730,6 +852,20 @@ def build_parser() -> argparse.ArgumentParser:
     dataset = sub.add_parser("check-dataset", help="Validate images and matching non-empty captions.")
     dataset.add_argument("project_name")
     dataset.set_defaults(func=check_dataset)
+
+    importer = sub.add_parser("import-images", help="Import or link images from another folder into a project.")
+    importer.add_argument("project_name")
+    importer.add_argument("source_dir")
+    importer.add_argument("--mode", choices=["copy", "symlink", "hardlink"], default="copy")
+    importer.add_argument("--force", action="store_true", help="Overwrite existing imported images.")
+    importer.add_argument("--trigger", help="Create or fill captions with this trigger text while importing.")
+    importer.add_argument("--force-caption", action="store_true", help="Overwrite existing captions when --trigger is set.")
+    importer.set_defaults(func=import_images)
+
+    report = sub.add_parser("dataset-report", help="Print a compact dataset/cache/output report.")
+    report.add_argument("project_name")
+    report.add_argument("--json", help="Optional path to write the report JSON.")
+    report.set_defaults(func=dataset_report)
 
     stubs = sub.add_parser("create-caption-stubs", help="Create or fill missing/empty .txt captions.")
     stubs.add_argument("project_name")

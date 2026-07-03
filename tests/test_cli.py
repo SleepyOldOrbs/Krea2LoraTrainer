@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import krea2_lora
 
@@ -103,6 +104,30 @@ comfy_lora_dir = "{toml_path(self.comfy)}"
         )
         self.assertEqual(self.run_cli("check-dataset", "jagmoon"), 0)
         self.assertEqual(image.with_suffix(".txt").read_text(encoding="utf-8"), "jagmoon style\n")
+
+    def test_import_images_and_dataset_report(self) -> None:
+        source = self.root / "source"
+        source.mkdir()
+        (source / "one.jpg").write_bytes(b"one")
+        (source / "two.webp").write_bytes(b"two")
+
+        self.assertEqual(self.run_cli("init-project", "jagmoon"), 0)
+        self.assertEqual(
+            self.run_cli(
+                "import-images",
+                "jagmoon",
+                str(source),
+                "--trigger",
+                "jagmoon style",
+            ),
+            0,
+        )
+        self.assertEqual(self.run_cli("dataset-report", "jagmoon"), 0)
+        self.assertEqual((self.projects / "jagmoon" / "images" / "one.txt").read_text(encoding="utf-8"), "jagmoon style\n")
+
+    def test_cli_path_converts_windows_paths_under_posix(self) -> None:
+        with mock.patch.object(krea2_lora.os, "name", "posix"):
+            self.assertEqual(str(krea2_lora.cli_path(r"C:\Temp\JAG")), "/mnt/c/Temp/JAG")
 
     def test_train_dry_run_can_skip_checks(self) -> None:
         self.assertEqual(self.run_cli("init-project", "jagmoon"), 0)
