@@ -7,6 +7,9 @@ const state = {
   reviewFilter: "all",
   timeline: [],
   activeTimelineId: null,
+  captionDrafts: {},
+  modelProgress: {},
+  runtimeProfile: "wsl",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -21,6 +24,9 @@ const ACTION_TITLES = {
   "init-project": "Init Project",
   "import-images": "Import Images",
   "generate-captions": "Generate VL Captions",
+  "save-caption": "Save Caption",
+  "save-captions": "Save Changed Captions",
+  "regenerate-caption": "Regenerate Caption",
   "dataset-report": "Dataset Report",
   "cache-latents-dry": "Dry Run Latents",
   "cache-text-dry": "Dry Run Text Cache",
@@ -54,6 +60,12 @@ function setBusy(next) {
   document.querySelectorAll("button[data-action]").forEach((button) => {
     button.disabled = next;
   });
+  if (state.config) {
+    renderModelInventory(state.config);
+  }
+  if (state.latestReport && !$("datasetModal").hidden) {
+    renderDatasetReview(state.latestReport);
+  }
 }
 
 function setRunSummary(text, level = "neutral") {
@@ -65,6 +77,7 @@ function setRunSummary(text, level = "neutral") {
 function statusTone(status) {
   if (["ok", "installed", "ready", "completed"].includes(status)) return "ok";
   if (["error", "missing", "failed"].includes(status)) return "error";
+  if (["queued", "downloading"].includes(status)) return "warn";
   return "warn";
 }
 
@@ -235,12 +248,47 @@ function renderReadiness() {
   );
 }
 
+function modelStatusText(status) {
+  if (status === "installed") return "Installed";
+  if (status === "queued") return "Queued";
+  if (status === "downloading") return "Downloading";
+  if (status === "failed") return "Failed";
+  return "Missing";
+}
+
+function modelButtonText(status) {
+  if (status === "installed") return "Installed";
+  if (status === "queued" || status === "downloading") return "Downloading";
+  if (status === "failed") return "Retry";
+  return "Download";
+}
+
+function renderRuntimeSelector(runtime) {
+  const selector = $("runtimeSelector");
+  if (!selector) return;
+  selector.querySelectorAll("[data-runtime-profile]").forEach((button) => {
+    const profile = button.dataset.runtimeProfile;
+    const active = profile === state.runtimeProfile;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+    if (profile === "windows") {
+      button.setAttribute("aria-disabled", "false");
+      button.title = "Native Windows execution is planned, but this repo currently runs musubi commands through the Linux/WSL path profile.";
+    } else {
+      button.setAttribute("aria-disabled", "false");
+      button.title = runtime?.message || "Recommended for the current helper commands.";
+    }
+  });
+}
+
 function renderModelInventory(config) {
   const list = $("modelInventory");
   list.innerHTML = "";
   (config.models || []).forEach((model) => {
+    const progress = state.modelProgress[model.name] || null;
+    const effectiveStatus = progress?.status || model.status;
     const row = document.createElement("article");
-    row.className = `model-row ${statusTone(model.status)}`;
+    row.className = `model-row ${statusTone(effectiveStatus)}`;
 
     const copy = document.createElement("div");
     copy.className = "model-copy";
@@ -254,11 +302,26 @@ function renderModelInventory(config) {
     path.className = "model-path";
     path.textContent = model.path;
     copy.append(title, detail, path);
+    if (progress?.message) {
+      const progressText = document.createElement("div");
+      progressText.className = `model-progress ${statusTone(effectiveStatus)}`;
+      progressText.textContent = progress.message;
+      copy.appendChild(progressText);
+    }
 
+    const actions = document.createElement("div");
+    actions.className = "model-actions";
     const status = document.createElement("span");
-    status.className = `model-status ${statusTone(model.status)}`;
-    status.textContent = model.status === "installed" ? "Installed" : "Missing";
-    row.append(copy, status);
+    status.className = `model-status ${statusTone(effectiveStatus)}`;
+    status.textContent = modelStatusText(effectiveStatus);
+    const download = document.createElement("button");
+    download.className = "compact model-download";
+    download.type = "button";
+    download.textContent = modelButtonText(effectiveStatus);
+    download.disabled = state.busy || ["installed", "queued", "downloading"].includes(effectiveStatus);
+    download.addEventListener("click", () => runModelDownload(model.name));
+    actions.append(status, download);
+    row.append(copy, actions);
     list.appendChild(row);
   });
 
@@ -266,6 +329,7 @@ function renderModelInventory(config) {
   $("runtimeNote").textContent = runtime
     ? `${runtime.label}: ${runtime.message}`
     : "Runtime status will appear after config loads.";
+  renderRuntimeSelector(runtime);
 }
 
 function renderTimeline() {
@@ -360,6 +424,70 @@ function captionStateText(item) {
   return "No caption file found.";
 }
 
+function captionDraftKey(project, image) {
+  return `${project}::${image}`;
+}
+
+function ensureCaptionDraft(project, item) {
+  const key = captionDraftKey(project, item.relative_path);
+  const current = state.captionDrafts[key];
+  const caption = item.caption || "";
+  if (!current || (!current.dirty && current.original !== caption)) {
+    state.captionDrafts[key] = {
+      original: caption,
+      value: caption,
+      dirty: false,
+    };
+  }
+  return state.captionDrafts[key];
+}
+
+function updateCaptionDraftFromItem(project, item) {
+  const key = captionDraftKey(project, item.relative_path);
+  const caption = item.caption || "";
+  state.captionDrafts[key] = {
+    original: caption,
+    value: caption,
+    dirty: false,
+  };
+}
+
+function dirtyCaptionUpdates(project) {
+  const prefix = `${project}::`;
+  return Object.entries(state.captionDrafts)
+    .filter(([key, draft]) => key.startsWith(prefix) && draft.dirty)
+    .map(([key, draft]) => ({
+      image: key.slice(prefix.length),
+      caption: draft.value,
+    }));
+}
+
+function updateCaptionEditorState(project, image, nextValue) {
+  const key = captionDraftKey(project, image);
+  const draft = state.captionDrafts[key];
+  if (!draft) return;
+  draft.value = nextValue;
+  draft.dirty = draft.value.trim() !== draft.original.trim();
+  updateSaveChangedButton(project);
+}
+
+function resetCaptionDraft(project, image) {
+  const key = captionDraftKey(project, image);
+  const draft = state.captionDrafts[key];
+  if (!draft) return;
+  draft.value = draft.original;
+  draft.dirty = false;
+  if (state.latestReport) renderDatasetReview(state.latestReport);
+}
+
+function updateSaveChangedButton(project) {
+  const button = $("saveChangedCaptions");
+  if (!button) return;
+  const count = project ? dirtyCaptionUpdates(project).length : 0;
+  button.textContent = count ? `Save Changed (${count})` : "Save Changed";
+  button.disabled = state.busy || count === 0;
+}
+
 function reviewCounts(items) {
   const ready = items.filter((item) => item.caption_status === "ready").length;
   const missing = items.filter((item) => item.caption_status === "missing").length;
@@ -413,7 +541,7 @@ function renderDatasetSummary(counts) {
 
 function renderCaptionGate(counts) {
   const gate = $("captionGate");
-  const generateButton = $("generateMissingCaptions");
+  const generateButton = $("regenerateMissingCaptions");
   if (!counts.total) {
     gate.className = "caption-gate warn";
     gate.textContent = "No project images found. Import images before caching or training.";
@@ -456,6 +584,7 @@ function renderDatasetReview(report) {
   renderDatasetSummary(counts);
   updateReviewFilters(counts);
   renderCaptionGate(counts);
+  updateSaveChangedButton(report.project);
   list.innerHTML = "";
   if (!items.length) {
     const emptyMessage = document.createElement("div");
@@ -477,8 +606,15 @@ function renderDatasetReview(report) {
   }
 
   visibleItems.forEach((item) => {
+    const draft = ensureCaptionDraft(report.project, item);
     const row = document.createElement("article");
-    row.className = `review-item ${item.caption_status === "ready" ? "" : "needs-attention"}`.trim();
+    row.className = [
+      "review-item",
+      item.caption_status === "ready" ? "" : "needs-attention",
+      draft.dirty ? "dirty" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
 
     const thumb = document.createElement("div");
     thumb.className = "review-thumb";
@@ -506,13 +642,47 @@ function renderDatasetReview(report) {
     const total = String(items.length).padStart(2, "0");
     submeta.textContent = `${position} / ${total} | ${item.caption_file} | ${formatBytes(item.size_bytes)}`;
 
-    const caption = document.createElement("p");
-    caption.className = "review-caption";
-    caption.textContent = captionStateText(item);
-    copy.append(meta, submeta, caption);
+    const caption = document.createElement("textarea");
+    caption.className = "caption-editor";
+    caption.value = draft.value;
+    caption.placeholder = captionStateText(item);
+    caption.rows = 4;
+    caption.disabled = state.busy;
+    caption.setAttribute("aria-label", `Caption for ${item.file_name}`);
+
+    const captionActions = document.createElement("div");
+    captionActions.className = "caption-actions";
+    const save = document.createElement("button");
+    save.className = "compact";
+    save.type = "button";
+    save.textContent = "Save";
+    save.disabled = state.busy || !draft.dirty;
+    const reset = document.createElement("button");
+    reset.className = "compact ghost";
+    reset.type = "button";
+    reset.textContent = "Reset";
+    reset.disabled = state.busy || !draft.dirty;
+    const regenerate = document.createElement("button");
+    regenerate.className = "compact ghost";
+    regenerate.type = "button";
+    regenerate.textContent = "Regenerate";
+    regenerate.disabled = state.busy;
+    caption.addEventListener("input", () => {
+      updateCaptionEditorState(report.project, item.relative_path, caption.value);
+      row.classList.toggle("dirty", draft.dirty);
+      save.disabled = state.busy || !draft.dirty;
+      reset.disabled = state.busy || !draft.dirty;
+    });
+    save.addEventListener("click", () => saveCaption(item.relative_path));
+    reset.addEventListener("click", () => resetCaptionDraft(report.project, item.relative_path));
+    regenerate.addEventListener("click", () => regenerateCaption(item.relative_path));
+    captionActions.append(save, reset, regenerate);
+
+    copy.append(meta, submeta, caption, captionActions);
     row.append(thumb, copy);
     list.appendChild(row);
   });
+  updateSaveChangedButton(report.project);
 }
 
 function openDatasetReview(report) {
@@ -529,9 +699,9 @@ function closeDatasetReview() {
   $("datasetModal").hidden = true;
 }
 
-function payloadFor(action) {
+function payloadFor(action, overrides = {}) {
   const form = values();
-  const payload = { action, ...form };
+  const payload = { action, ...form, ...overrides };
   if (action === "cache-latents-dry") {
     payload.action = "cache-latents";
     payload.dry_run = true;
@@ -599,9 +769,176 @@ function summarizeResult(action, result) {
   return { text: successes[action] || `${ACTION_TITLES[action] || "Action"} completed successfully.`, level: "ok" };
 }
 
-async function runAction(action) {
+async function saveCaption(image) {
+  const project = values().project;
+  const draft = state.captionDrafts[captionDraftKey(project, image)];
+  if (!project || !draft || !draft.dirty) return;
+  const action = "save-caption";
   setBusy(true);
-  const payload = payloadFor(action);
+  setRunSummary("Saving caption edit...", "warn");
+  startTimelineEntry(action);
+  appendLog(`$ save-caption ${project} ${image}`);
+  try {
+    const result = await postJSON("/api/caption", {
+      project,
+      image,
+      caption: draft.value,
+    });
+    updateCaptionDraftFromItem(project, result.saved);
+    appendLog(`Saved ${result.saved.caption_file}`);
+    const summary = { text: "Caption edit saved.", level: "ok" };
+    setRunSummary(summary.text, summary.level);
+    finishTimelineEntry(action, summary, true);
+    await refreshReport();
+  } catch (error) {
+    const summary = { text: `Caption could not be saved: ${error.message}`, level: "error" };
+    setRunSummary(summary.text, summary.level);
+    finishTimelineEntry(action, summary, false);
+    appendLog(`error: ${error.message}`);
+  } finally {
+    setBusy(false);
+    if (state.latestReport && !$("datasetModal").hidden) {
+      renderDatasetReview(state.latestReport);
+    }
+  }
+}
+
+async function saveChangedCaptions() {
+  const project = values().project;
+  const updates = dirtyCaptionUpdates(project);
+  if (!project || !updates.length) {
+    setRunSummary("There are no caption edits to save.", "neutral");
+    return;
+  }
+  const action = "save-captions";
+  setBusy(true);
+  setRunSummary(`Saving ${updates.length} caption edits...`, "warn");
+  startTimelineEntry(action);
+  appendLog(`$ save-captions ${project} ${updates.length}`);
+  try {
+    const result = await postJSON("/api/captions", { project, items: updates });
+    (result.saved || []).forEach((item) => updateCaptionDraftFromItem(project, item));
+    appendLog(`Saved ${result.count} caption edit${result.count === 1 ? "" : "s"}.`);
+    const summary = { text: `${result.count} caption edit${result.count === 1 ? "" : "s"} saved.`, level: "ok" };
+    setRunSummary(summary.text, summary.level);
+    finishTimelineEntry(action, summary, true);
+    await refreshReport();
+  } catch (error) {
+    const summary = { text: `Caption edits could not be saved: ${error.message}`, level: "error" };
+    setRunSummary(summary.text, summary.level);
+    finishTimelineEntry(action, summary, false);
+    appendLog(`error: ${error.message}`);
+  } finally {
+    setBusy(false);
+    if (state.latestReport && !$("datasetModal").hidden) {
+      renderDatasetReview(state.latestReport);
+    }
+  }
+}
+
+async function regenerateCaption(image) {
+  const project = values().project;
+  if (!project) return;
+  const action = "regenerate-caption";
+  setBusy(true);
+  setRunSummary("Regenerating caption with the configured VL model...", "warn");
+  startTimelineEntry(action);
+  appendLog(`$ regenerate-caption ${project} ${image}`);
+  try {
+    const result = await postJSON("/api/regenerate-caption", {
+      ...values(),
+      project,
+      image,
+    });
+    const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
+    appendLog(`${output || "(no output)"}\nexit ${result.returncode}`);
+    const ok = result.returncode === 0;
+    if (ok && result.item) {
+      updateCaptionDraftFromItem(project, result.item);
+    }
+    const summary = {
+      text: ok
+        ? "Caption regenerated with the VL model."
+        : "Caption regeneration failed. Review the run log for the VL model error.",
+      level: ok ? "ok" : "error",
+    };
+    setRunSummary(summary.text, summary.level);
+    finishTimelineEntry(action, summary, ok);
+    await refreshReport();
+  } catch (error) {
+    const summary = { text: `Caption regeneration could not start: ${error.message}`, level: "error" };
+    setRunSummary(summary.text, summary.level);
+    finishTimelineEntry(action, summary, false);
+    appendLog(`error: ${error.message}`);
+  } finally {
+    setBusy(false);
+    if (state.latestReport && !$("datasetModal").hidden) {
+      renderDatasetReview(state.latestReport);
+    }
+  }
+}
+
+async function runModelDownload(modelName = "all") {
+  const models = state.config?.models || [];
+  const targets =
+    modelName === "all"
+      ? models.filter((model) => model.status !== "installed").map((model) => model.name)
+      : [modelName];
+  if (!targets.length) {
+    setRunSummary("All configured models are already installed.", "ok");
+    return;
+  }
+  targets.forEach((target) => {
+    state.modelProgress[target] = { status: "queued", message: "Waiting for download to start." };
+  });
+  renderModelInventory(state.config);
+
+  const action = "download-models";
+  setBusy(true);
+  targets.forEach((target) => {
+    state.modelProgress[target] = { status: "downloading", message: "Download is running. Watch the run log for details." };
+  });
+  renderModelInventory(state.config);
+  setRunSummary(
+    modelName === "all" ? "Downloading missing models..." : "Downloading selected model...",
+    "warn"
+  );
+  startTimelineEntry(action);
+  const payload = payloadFor(action, { model: modelName });
+  appendLog(`$ download-models --model ${modelName}`);
+  try {
+    const result = await postJSON("/api/run", payload);
+    const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
+    appendLog(`${output || "(no output)"}\nexit ${result.returncode}`);
+    const ok = result.returncode === 0;
+    targets.forEach((target) => {
+      state.modelProgress[target] = {
+        status: ok ? "installed" : "failed",
+        message: ok ? "Installed or already present." : "Download failed. Review the run log.",
+      };
+    });
+    markActionComplete(action, ok);
+    const summary = summarizeResult(action, result);
+    setRunSummary(summary.text, summary.level);
+    finishTimelineEntry(action, summary, ok);
+    await refreshConfig();
+  } catch (error) {
+    targets.forEach((target) => {
+      state.modelProgress[target] = { status: "failed", message: "Download could not start." };
+    });
+    markActionComplete(action, false);
+    const summary = { text: `Model download could not start: ${error.message}`, level: "error" };
+    setRunSummary(summary.text, summary.level);
+    finishTimelineEntry(action, summary, false);
+    appendLog(`error: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function runAction(action, overrides = {}) {
+  setBusy(true);
+  const payload = payloadFor(action, overrides);
   setRunSummary(`Running ${ACTION_TITLES[action] || payload.action}...`, "warn");
   startTimelineEntry(action);
   appendLog(`$ ${payload.action} ${payload.project || ""}`.trim());
@@ -682,11 +1019,14 @@ function clearProject() {
   state.latestReport = null;
   state.reviewFilter = "all";
   state.timeline = [];
+  state.captionDrafts = {};
+  state.modelProgress = {};
   $("consoleLog").textContent = "Ready.";
   renderTimeline();
   setRunSummary("Project fields cleared. Workflow ticks were reset. No files were deleted.", "ok");
   closeDatasetReview();
   restoreCompletedActions();
+  if (state.config) renderModelInventory(state.config);
   renderReadiness();
 }
 
@@ -697,7 +1037,19 @@ async function reviewCurrentDataset() {
 
 function runMissingCaptions() {
   closeDatasetReview();
-  runAction("generate-captions");
+  runAction("generate-captions", { force_caption: false });
+}
+
+function handleRuntimeSelection(profile) {
+  if (profile === "windows") {
+    state.runtimeProfile = "wsl";
+    if (state.config) renderRuntimeSelector(state.config.runtime);
+    setRunSummary("Native Windows runner profile is not available yet. WSL/Linux remains active for musubi commands.", "warn");
+    return;
+  }
+  state.runtimeProfile = "wsl";
+  if (state.config) renderRuntimeSelector(state.config.runtime);
+  setRunSummary("WSL/Linux profile selected for local musubi workflow commands.", "ok");
 }
 
 function bind() {
@@ -713,7 +1065,12 @@ function bind() {
   $("clearProject").addEventListener("click", clearProject);
   $("reviewDataset").addEventListener("click", reviewCurrentDataset);
   $("closeDatasetModal").addEventListener("click", closeDatasetReview);
-  $("generateMissingCaptions").addEventListener("click", runMissingCaptions);
+  $("saveChangedCaptions").addEventListener("click", saveChangedCaptions);
+  $("regenerateMissingCaptions").addEventListener("click", runMissingCaptions);
+  $("modelDownloadMissing").addEventListener("click", () => runModelDownload("all"));
+  document.querySelectorAll("[data-runtime-profile]").forEach((button) => {
+    button.addEventListener("click", () => handleRuntimeSelection(button.dataset.runtimeProfile));
+  });
   document.querySelectorAll(".review-filter").forEach((button) => {
     button.addEventListener("click", () => {
       state.reviewFilter = button.dataset.filter || "all";

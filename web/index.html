@@ -199,10 +199,17 @@
                 <span class="caption">Models</span>
                 <h3>Inventory</h3>
               </div>
-              <button class="ghost compact" type="button" data-action="download-models">Download Missing</button>
+              <button id="modelDownloadMissing" class="ghost compact" type="button">Download Missing</button>
             </div>
             <div id="modelInventory" class="model-list" aria-live="polite"></div>
             <div id="runtimeNote" class="runtime-note">Runtime status will appear after config loads.</div>
+            <div id="runtimeSelector" class="runtime-selector" aria-label="Runtime profile">
+              <button type="button" class="runtime-option active" data-runtime-profile="wsl">WSL/Linux</button>
+              <button type="button" class="runtime-option experimental" data-runtime-profile="windows">
+                Native Windows
+                <span>Experimental</span>
+              </button>
+            </div>
           </div>
         </section>
 
@@ -241,7 +248,8 @@
               <button class="review-filter" type="button" data-filter="ready">Ready</button>
               <button class="review-filter" type="button" data-filter="needs">Needs attention</button>
             </div>
-            <button id="generateMissingCaptions" class="ghost compact" type="button">Generate Missing</button>
+            <button id="saveChangedCaptions" class="ghost compact" type="button" disabled>Save Changed</button>
+            <button id="regenerateMissingCaptions" class="ghost compact" type="button">Regenerate Missing / Empty</button>
           </div>
         </div>
         <div id="captionGate" class="caption-gate">Run Dataset Report to check caption readiness.</div>

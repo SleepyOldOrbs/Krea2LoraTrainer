@@ -512,6 +512,11 @@ button:disabled {
   background: #fff5f5;
 }
 
+.model-row.warn {
+  border-color: #ead4a5;
+  background: #fff8e8;
+}
+
 .model-copy {
   min-width: 0;
   display: grid;
@@ -535,6 +540,31 @@ button:disabled {
 .model-path {
   font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
   font-size: 11px;
+}
+
+.model-progress {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.model-progress.ok {
+  color: var(--accent-dark);
+}
+
+.model-progress.warn {
+  color: var(--amber);
+}
+
+.model-progress.error {
+  color: var(--danger);
+}
+
+.model-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .model-status {
@@ -564,6 +594,16 @@ button:disabled {
   color: var(--danger);
 }
 
+.model-status.warn {
+  border-color: #ead4a5;
+  background: #fff8e8;
+  color: var(--amber);
+}
+
+.model-download {
+  min-width: 94px;
+}
+
 .runtime-note {
   margin-top: 10px;
   padding: 10px 12px;
@@ -574,6 +614,44 @@ button:disabled {
   font-size: 12px;
   font-weight: 700;
   line-height: 1.4;
+}
+
+.runtime-selector {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.runtime-option {
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  background: #fff;
+  color: #43515e;
+}
+
+.runtime-option.active {
+  border-color: var(--accent);
+  background: #dff2ec;
+  color: var(--accent-dark);
+}
+
+.runtime-option.experimental {
+  border-style: dashed;
+}
+
+.runtime-option[aria-disabled="true"]:not(.active) {
+  color: var(--muted);
+  background: #fbfcfd;
+}
+
+.runtime-option span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 dt {
@@ -910,6 +988,11 @@ pre {
   background: #fffafa;
 }
 
+.review-item.dirty {
+  border-color: #ead4a5;
+  background: #fffdf7;
+}
+
 .review-thumb {
   min-height: 138px;
   display: flex;
@@ -932,7 +1015,7 @@ pre {
 .review-copy {
   min-width: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(92px, 1fr) auto;
   gap: 7px;
 }
 
@@ -984,18 +1067,36 @@ pre {
   background: #fff1f1;
 }
 
-.review-caption {
+.caption-editor {
   min-height: 78px;
+  width: 100%;
   margin: 0;
   padding: 10px;
-  overflow: auto;
+  resize: vertical;
   border: 1px solid #dbe3e9;
   border-radius: 6px;
   background: #fff;
   color: var(--text);
+  font-family: inherit;
   font-size: 13px;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+.review-item.dirty .caption-editor {
+  border-color: #e1bd68;
+  background: #fffdfa;
+}
+
+.caption-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.caption-actions button {
+  min-width: 92px;
 }
 
 .empty-review {
@@ -1061,6 +1162,14 @@ pre {
 
   .model-heading button {
     width: 100%;
+  }
+
+  .model-row {
+    grid-template-columns: 1fr;
+  }
+
+  .model-actions {
+    justify-content: flex-start;
   }
 }
 
@@ -1144,5 +1253,15 @@ pre {
 
   .review-thumb {
     min-height: 180px;
+  }
+
+  .caption-actions,
+  .caption-actions button {
+    width: 100%;
+  }
+
+  .runtime-selector {
+    width: 100%;
+    grid-template-columns: 1fr;
   }
 }

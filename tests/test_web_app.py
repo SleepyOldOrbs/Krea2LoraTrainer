@@ -8,6 +8,10 @@ import krea2_lora
 import web_app
 
 
+def toml_path(path: Path) -> str:
+    return str(path).replace("\\", "/")
+
+
 class WebAppTests(unittest.TestCase):
     def test_build_train_args_defaults_to_dry_run(self) -> None:
         args = web_app.build_cli_args({"action": "train", "project": "demo"})
@@ -35,6 +39,10 @@ class WebAppTests(unittest.TestCase):
             }
         )
         self.assertEqual(args[-3:], ["download-models", "--caption-model", "Salesforce/blip-image-captioning-base"])
+
+    def test_download_models_can_target_one_model(self) -> None:
+        args = web_app.build_cli_args({"action": "download-models", "model": "qwen_vae"})
+        self.assertEqual(args[-3:], ["download-models", "--model", "qwen_vae"])
 
     def test_import_images_args_are_whitelisted(self) -> None:
         args = web_app.build_cli_args(
@@ -127,6 +135,71 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(web_app.safe_project_image(config, "demo", "ok.png"), project_images / "ok.png")
             with self.assertRaises(ValueError):
                 web_app.safe_project_image(config, "demo", "../outside.png")
+
+    def test_save_caption_payload_writes_matching_caption_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.toml"
+            projects = root / "projects"
+            images = projects / "demo" / "images"
+            images.mkdir(parents=True)
+            (images / "sample.png").write_bytes(b"png")
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "[paths]",
+                        f'projects_root = "{toml_path(projects)}"',
+                        f'musubi_repo = "{toml_path(root / "musubi")}"',
+                        f'musubi_venv = "{toml_path(root / "musubi-venv")}"',
+                        f'captioning_venv = "{toml_path(root / "caption-venv")}"',
+                        f'krea_raw = "{toml_path(root / "models" / "raw.safetensors")}"',
+                        f'qwen_vae = "{toml_path(root / "models" / "vae.safetensors")}"',
+                        f'qwen_text_encoder = "{toml_path(root / "models" / "text.safetensors")}"',
+                        f'comfy_lora_dir = "{toml_path(root / "comfy")}"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = web_app.save_caption_payload(
+                {"project": "demo", "image": "sample.png", "caption": " edited caption "},
+                config_path,
+            )
+
+            self.assertEqual(result["saved"]["caption_status"], "ready")
+            self.assertEqual(result["saved"]["caption"], "edited caption")
+            self.assertEqual((images / "sample.txt").read_text(encoding="utf-8"), "edited caption\n")
+
+    def test_save_caption_payload_rejects_path_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.toml"
+            projects = root / "projects"
+            images = projects / "demo" / "images"
+            images.mkdir(parents=True)
+            (images / "sample.png").write_bytes(b"png")
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "[paths]",
+                        f'projects_root = "{toml_path(projects)}"',
+                        f'musubi_repo = "{toml_path(root / "musubi")}"',
+                        f'musubi_venv = "{toml_path(root / "musubi-venv")}"',
+                        f'captioning_venv = "{toml_path(root / "caption-venv")}"',
+                        f'krea_raw = "{toml_path(root / "models" / "raw.safetensors")}"',
+                        f'qwen_vae = "{toml_path(root / "models" / "vae.safetensors")}"',
+                        f'qwen_text_encoder = "{toml_path(root / "models" / "text.safetensors")}"',
+                        f'comfy_lora_dir = "{toml_path(root / "comfy")}"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError):
+                web_app.save_caption_payload(
+                    {"project": "demo", "image": "../outside.png", "caption": "bad"},
+                    config_path,
+                )
 
     def test_model_inventory_reports_file_and_vl_cache_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

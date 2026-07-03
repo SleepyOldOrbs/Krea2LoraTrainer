@@ -20,6 +20,8 @@ import krea2_lora
 
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
+MAX_CAPTION_CHARS = 20_000
+DOWNLOAD_MODEL_CHOICES = {"all", "krea_raw", "qwen_vae", "qwen_text_encoder", "vl_caption"}
 
 
 class WebState:
@@ -52,6 +54,11 @@ def build_cli_args(payload: dict[str, object], config: Path | None = None) -> li
             args.append("--create-comfy-dir")
     elif action == "download-models":
         args.append("download-models")
+        model = text_value(payload, "model", "all")
+        if model not in DOWNLOAD_MODEL_CHOICES:
+            raise ValueError("model must be all, krea_raw, qwen_vae, qwen_text_encoder, or vl_caption")
+        if model != "all":
+            args.extend(["--model", model])
         caption_model = text_value(payload, "caption_model")
         if caption_model:
             args.extend(["--caption-model", caption_model])
@@ -169,6 +176,19 @@ def dataset_review_items(project: krea2_lora.ProjectPaths) -> list[dict[str, obj
     return items
 
 
+def dataset_review_item(project: krea2_lora.ProjectPaths, image: Path) -> dict[str, object]:
+    caption = image.with_suffix(".txt")
+    status, text = caption_status(caption)
+    return {
+        "file_name": image.name,
+        "relative_path": image.relative_to(project.images).as_posix(),
+        "caption_file": caption.name,
+        "caption": text,
+        "caption_status": status,
+        "size_bytes": image.stat().st_size,
+    }
+
+
 def hf_model_cache_dir(model_id: str) -> Path:
     root = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
     return root / "hub" / f"models--{model_id.replace('/', '--')}"
@@ -251,6 +271,102 @@ def safe_project_image(config: krea2_lora.AppConfig, project: str, image: str) -
     return target
 
 
+def safe_existing_project_image(config: krea2_lora.AppConfig, project: str, image: str) -> Path:
+    target = safe_project_image(config, project, image)
+    if not target.is_file():
+        raise ValueError("image was not found in the project image folder")
+    return target
+
+
+def normalize_caption_text(text: object) -> str:
+    caption = str(text).replace("\r\n", "\n").replace("\r", "\n").strip()
+    if len(caption) > MAX_CAPTION_CHARS:
+        raise ValueError(f"caption must be {MAX_CAPTION_CHARS} characters or fewer")
+    return caption
+
+
+def write_caption_for_image(config: krea2_lora.AppConfig, project: str, image: str, caption: object) -> dict[str, object]:
+    image_path = safe_existing_project_image(config, project, image)
+    paths = krea2_lora.project_paths(config, project)
+    text = normalize_caption_text(caption)
+    caption_path = image_path.with_suffix(".txt")
+    caption_path.write_text((text + "\n") if text else "", encoding="utf-8", newline="\n")
+    return dataset_review_item(paths, image_path)
+
+
+def save_caption_payload(payload: dict[str, object], config_path: Path | None) -> dict[str, object]:
+    project = text_value(payload, "project")
+    image = text_value(payload, "image")
+    config = krea2_lora.load_config(config_path)
+    item = write_caption_for_image(config, project, image, payload.get("caption", ""))
+    return {"saved": item}
+
+
+def save_captions_payload(payload: dict[str, object], config_path: Path | None) -> dict[str, object]:
+    project = text_value(payload, "project")
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list):
+        raise ValueError("items must be a list of caption updates")
+    config = krea2_lora.load_config(config_path)
+    saved: list[dict[str, object]] = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            raise ValueError("each caption update must be an object")
+        image = text_value(raw_item, "image")
+        saved.append(write_caption_for_image(config, project, image, raw_item.get("caption", "")))
+    return {"count": len(saved), "saved": saved}
+
+
+def regenerate_caption_payload(payload: dict[str, object], config_path: Path | None) -> dict[str, object]:
+    project = text_value(payload, "project")
+    image = text_value(payload, "image")
+    config = krea2_lora.load_config(config_path)
+    paths = krea2_lora.project_paths(config, project)
+    image_path = safe_existing_project_image(config, project, image)
+    caption_path = image_path.with_suffix(".txt")
+    python_bin = krea2_lora.captioning_python(config)
+    if not python_bin.is_file():
+        raise ValueError(f"Captioning venv python not found: {python_bin}")
+
+    model = text_value(payload, "caption_model") or str(config.captioning["model"])
+    max_new_tokens = int(config.captioning["max_new_tokens"])
+    device = text_value(payload, "device", "auto")
+    if device not in {"auto", "cpu", "cuda"}:
+        raise ValueError("device must be auto, cpu, or cuda")
+    command = [
+        str(python_bin),
+        "-c",
+        krea2_lora.VLM_CAPTION_SCRIPT,
+        "--model",
+        model,
+        "--max-new-tokens",
+        str(max_new_tokens),
+        "--device",
+        device,
+    ]
+    trigger = text_value(payload, "trigger")
+    if trigger:
+        command.extend(["--trigger", trigger])
+    if bool_value(payload, "caption_local_only", True):
+        command.append("--local-files-only")
+
+    completed = subprocess.run(
+        command,
+        input=json.dumps({"items": [{"image": str(image_path), "caption": str(caption_path)}]}),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    item = dataset_review_item(paths, image_path) if completed.returncode == 0 else None
+    return {
+        "args": ["regenerate-caption", project, image],
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "item": item,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     state: WebState
 
@@ -274,22 +390,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
         parsed = urlparse(self.path)
-        if parsed.path != "/api/run":
-            self.send_json({"error": "Unknown API route"}, HTTPStatus.NOT_FOUND)
-            return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
-            args = build_cli_args(payload, self.state.config)
-            completed = subprocess.run(args, text=True, capture_output=True, check=False)
-            self.send_json(
-                {
-                    "args": args[2:],
-                    "returncode": completed.returncode,
-                    "stdout": completed.stdout,
-                    "stderr": completed.stderr,
-                }
-            )
+            if parsed.path == "/api/run":
+                args = build_cli_args(payload, self.state.config)
+                completed = subprocess.run(args, text=True, capture_output=True, check=False)
+                self.send_json(
+                    {
+                        "args": args[2:],
+                        "returncode": completed.returncode,
+                        "stdout": completed.stdout,
+                        "stderr": completed.stderr,
+                    }
+                )
+            elif parsed.path == "/api/caption":
+                self.send_json(save_caption_payload(payload, self.state.config))
+            elif parsed.path == "/api/captions":
+                self.send_json(save_captions_payload(payload, self.state.config))
+            elif parsed.path == "/api/regenerate-caption":
+                self.send_json(regenerate_caption_payload(payload, self.state.config))
+            else:
+                self.send_json({"error": "Unknown API route"}, HTTPStatus.NOT_FOUND)
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -333,7 +455,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        self.write_response_body(body)
 
     def serve_static(self, request_path: str) -> None:
         relative = "index.html" if request_path in {"", "/"} else request_path.lstrip("/")
@@ -350,7 +472,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        self.write_response_body(body)
 
     def send_json(self, payload: object, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, indent=2).encode("utf-8")
@@ -359,7 +481,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        self.write_response_body(body)
+
+    def write_response_body(self, body: bytes) -> None:
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"{self.address_string()} - {fmt % args}")
