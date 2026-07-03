@@ -116,6 +116,18 @@ Check project state:
 python krea2_lora.py status jagmoon
 ```
 
+Or use the guided terminal UI:
+
+```bash
+python krea2_lora.py wizard jagmoon --source-dir /mnt/c/Temp/JAG --trigger "jagmoon style"
+```
+
+From Windows PowerShell:
+
+```powershell
+.\scripts\run-wizard-wsl.ps1 jagmoon --source-dir C:\Temp\JAG --trigger "jagmoon style"
+```
+
 ## Commands
 
 - `show-config`: print resolved path, dataset, and training settings
@@ -125,6 +137,7 @@ python krea2_lora.py status jagmoon
 - `check-dataset PROJECT_NAME`: ensure images exist and every image has a non-empty matching caption
 - `import-images PROJECT_NAME SOURCE_DIR`: copy, symlink, or hardlink images into the project
 - `dataset-report PROJECT_NAME`: summarize image size/counts, caption state, cache files, and outputs
+- `wizard [PROJECT_NAME]`: open a guided terminal menu for setup, import, reports, dry-runs, caching, and copy-to-Comfy
 - `create-caption-stubs PROJECT_NAME --trigger "...":` create or fill missing/empty captions
 - `cache-latents PROJECT_NAME`: run `krea2_cache_latents.py`
 - `cache-text PROJECT_NAME`: run `krea2_cache_text_encoder_outputs.py`

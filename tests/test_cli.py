@@ -155,6 +155,14 @@ comfy_lora_dir = "{toml_path(self.comfy)}"
             self.models / "qwen",
         )
 
+    def test_wizard_can_quit(self) -> None:
+        with mock.patch("builtins.input", side_effect=["0"]):
+            self.assertEqual(self.run_cli("wizard", "jagmoon"), 0)
+
+    def test_wizard_handles_closed_input(self) -> None:
+        with mock.patch("builtins.input", side_effect=EOFError):
+            self.assertEqual(self.run_cli("wizard", "jagmoon"), 0)
+
     def test_project_name_rejects_paths(self) -> None:
         with self.assertRaises(ValueError):
             krea2_lora.validate_project_name("../bad")

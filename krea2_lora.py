@@ -842,6 +842,87 @@ def dataset_report(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def prompt_text(label: str, default: str | None = None, required: bool = False) -> str:
+    suffix = f" [{default}]" if default else ""
+    while True:
+        try:
+            value = input(f"{label}{suffix}: ").strip()
+        except EOFError:
+            return default or ""
+        if not value and default is not None:
+            return default
+        if value or not required:
+            return value
+        print("A value is required.")
+
+
+def wizard(args: argparse.Namespace) -> int:
+    project_name = args.project_name or prompt_text("Project name", required=True)
+    source_dir = args.source_dir or ""
+    trigger = args.trigger or ""
+    mode = args.mode
+
+    print("Krea2 LoRA Helper")
+    print(f"Project: {project_name}")
+    while True:
+        print()
+        print("1. Validate environment")
+        print("2. Init project")
+        print("3. Import/link images")
+        print("4. Create/fill caption stubs")
+        print("5. Dataset report")
+        print("6. Dry-run cache and train commands")
+        print("7. Run latent cache")
+        print("8. Run text cache")
+        print("9. Copy latest LoRA to ComfyUI")
+        print("0. Quit")
+        try:
+            choice = input("Select: ").strip()
+        except EOFError:
+            print()
+            print("Input closed; exiting wizard.")
+            return 0
+
+        if choice == "0":
+            return 0
+        if choice == "1":
+            validate_env(argparse.Namespace(config=args.config, create_comfy_dir=False))
+        elif choice == "2":
+            create_project(argparse.Namespace(config=args.config, project_name=project_name, force=False))
+        elif choice == "3":
+            source_dir = source_dir or prompt_text("Source image folder", required=True)
+            if not trigger:
+                trigger = prompt_text("Caption trigger", required=True)
+            import_images(
+                argparse.Namespace(
+                    config=args.config,
+                    project_name=project_name,
+                    source_dir=source_dir,
+                    mode=mode,
+                    force=False,
+                    trigger=trigger,
+                    force_caption=False,
+                )
+            )
+        elif choice == "4":
+            trigger = trigger or prompt_text("Caption trigger", required=True)
+            create_caption_stubs(argparse.Namespace(config=args.config, project_name=project_name, trigger=trigger))
+        elif choice == "5":
+            dataset_report(argparse.Namespace(config=args.config, project_name=project_name, json=None))
+        elif choice == "6":
+            cache_latents(argparse.Namespace(config=args.config, project_name=project_name, dry_run=True, skip_checks=False))
+            cache_text(argparse.Namespace(config=args.config, project_name=project_name, dry_run=True, skip_checks=False))
+            train(argparse.Namespace(config=args.config, project_name=project_name, dry_run=True, skip_checks=False))
+        elif choice == "7":
+            cache_latents(argparse.Namespace(config=args.config, project_name=project_name, dry_run=False, skip_checks=False))
+        elif choice == "8":
+            cache_text(argparse.Namespace(config=args.config, project_name=project_name, dry_run=False, skip_checks=False))
+        elif choice == "9":
+            copy_to_comfy(argparse.Namespace(config=args.config, project_name=project_name, file=None, dry_run=False))
+        else:
+            print("Unknown choice.")
+
+
 def cache_latents(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     project = project_paths(config, args.project_name)
@@ -974,6 +1055,13 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("project_name")
     report.add_argument("--json", help="Optional path to write the report JSON.")
     report.set_defaults(func=dataset_report)
+
+    wiz = sub.add_parser("wizard", help="Open a guided terminal menu for the common local workflow.")
+    wiz.add_argument("project_name", nargs="?")
+    wiz.add_argument("--source-dir", help="Prefill the image source folder for import.")
+    wiz.add_argument("--trigger", help="Prefill the caption trigger.")
+    wiz.add_argument("--mode", choices=["copy", "symlink", "hardlink"], default="symlink")
+    wiz.set_defaults(func=wizard)
 
     stubs = sub.add_parser("create-caption-stubs", help="Create or fill missing/empty .txt captions.")
     stubs.add_argument("project_name")
