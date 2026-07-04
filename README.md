@@ -9,11 +9,15 @@ The intended workflow is RAW training with Krea 2 RAW, then using the resulting 
 - WSL2 Ubuntu 24.04 or another Linux shell with Python 3.11+
 - Existing `musubi-tuner` checkout at `~/src/musubi-tuner`
 - Existing musubi virtual environment at `~/.venvs/musubi-krea2`
-- Existing captioning virtual environment at `~/.venvs/vl-caption` with `pillow` and `transformers` for VL captions
+- For the default high-quality caption backend, a Qwen-VL capable llama.cpp/KoboldCPP binary on `PATH` as `llama-qwen2vl-cli`, or set `captioning.llama_cli` in `config.toml`
+- Optional Transformers captioning virtual environment at `~/.venvs/vl-caption` with `pillow` and `transformers` if using `captioning.backend = "transformers"`
 - Existing model files:
   - `~/ai_models/krea2/raw.safetensors`
   - `~/ai_models/qwen/split_files/vae/qwen_image_vae.safetensors`
   - `~/ai_models/qwen/text_encoders/qwen3vl_4b_bf16.safetensors`
+- Default caption model files, downloaded with `python krea2_lora.py download-models --model vl_caption`:
+  - `~/ai_models/vl-caption/qwen2.5-vl-7b-captioner-relaxed-gguf/Qwen2.5-VL-7B-Captioner-Relaxed.Q6_K.gguf`
+  - `~/ai_models/vl-caption/qwen2.5-vl-7b-captioner-relaxed-gguf/Qwen2.5-VL-7B-Captioner-Relaxed.mmproj-f16.gguf`
 - ComfyUI LoRA destination, defaulting to `/mnt/c/ComfyUI_windows_portable/ComfyUI/models/loras/krea2-jim`
 
 ## First-time setup
@@ -28,6 +32,12 @@ Then validate the local paths:
 
 ```bash
 python krea2_lora.py validate-env
+```
+
+Run the test suite:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py" -q
 ```
 
 If model files are missing, download the configured Hugging Face files and the VL caption model:
@@ -90,19 +100,47 @@ python krea2_lora.py import-images jagmoon /mnt/c/Temp/JAG --mode symlink --trig
 python krea2_lora.py dataset-report jagmoon
 ```
 
+Recursive imports preserve subfolders under the project `images/` directory, so duplicate filenames from different source folders do not overwrite each other.
+
 Create caption stubs:
 
 ```bash
 python krea2_lora.py create-caption-stubs jagmoon --trigger "jagmoon style"
 ```
 
-Generate missing captions with a vision-language model from the captioning venv:
+Generate missing captions with the configured vision-language backend:
 
 ```bash
 python krea2_lora.py generate-captions jagmoon --trigger "jagmoon style"
 ```
 
-By default, VL captioning uses `Salesforce/blip-image-captioning-base` and `--local-files-only`, so it only uses a model already present in the Hugging Face cache. Use `--allow-downloads` when you explicitly want Transformers to fetch the caption model into the local HF cache.
+By default, captioning uses `qwen_gguf` with `mradermacher/Qwen2.5-VL-7B-Captioner-Relaxed-GGUF`, the `Q6_K` language-model quant, the f16 vision projector, and `gpu_layers = 99` for llama.cpp builds that support GPU offload. This is the quality-oriented 16 GB VRAM preset: materially better captions than BLIP, without running the full f16 15.2 GB model.
+
+To test another quant without editing `config.toml`, pass explicit filenames from the same GGUF repo:
+
+```bash
+python krea2_lora.py generate-captions jagmoon --model-file Qwen2.5-VL-7B-Captioner-Relaxed.Q6_K.gguf --mmproj-file Qwen2.5-VL-7B-Captioner-Relaxed.mmproj-f16.gguf
+```
+
+Use `--force` when replacing sparse or hand-written caption files:
+
+```bash
+python krea2_lora.py generate-captions jagmoon --trigger "jagmoon style" --force
+```
+
+Use `--allow-downloads` only when you want the helper to download missing configured caption files before captioning. Keep `captioning.local_files_only = true` or pass `--local-files-only` while curating datasets to avoid surprise downloads.
+
+For large caption runs, start a persistent llama.cpp server once and pass its URL so the model is not reloaded for every image:
+
+```bash
+python krea2_lora.py generate-captions jagmoon --trigger "jagmoon style" --server-url http://172.22.112.1:8100
+```
+
+The legacy Transformers path is still available:
+
+```bash
+python krea2_lora.py generate-captions jagmoon --backend transformers --model Salesforce/blip-image-captioning-base
+```
 
 Check the dataset:
 
@@ -175,7 +213,9 @@ Then open:
 http://127.0.0.1:8765/
 ```
 
-The web app is a local-only operational dashboard for the same helper commands. It can validate the environment, download missing models, initialize projects, import images, generate VL captions, show dataset reports, dry-run cache/train commands, plan multiple training variants, run cache steps, and copy the latest or selected LoRA to ComfyUI. The training action is guarded by the backend and defaults to `--dry-run`.
+The web app is a local-only operational dashboard for the same helper commands. It can validate the environment, download missing models, initialize projects, import images, generate VL captions, show dataset reports, dry-run cache/train commands, plan multiple training variants, run cache steps, and copy the latest or selected LoRA to ComfyUI. The caption controls expose the configured backend, model repo, GGUF model file, vision projector file, runtime executable, optional persistent server URL, token limit, GPU-layer offload, and Qwen prompt; the training action is guarded by the backend and defaults to `--dry-run`.
+
+The server refuses non-loopback bind hosts by default. Keep `--host` on `127.0.0.1` or `localhost`; `--unsafe-host` is only for deliberate LAN exposure.
 
 The Project Control header includes a `Clear Project` button. It clears the form fields and local workflow ticks only; it does not delete project files.
 
@@ -183,7 +223,7 @@ The Run Log includes a summary box above the raw command output with a plain-lan
 
 The Training Variants panel creates dry-run commands for several LoRA run configurations. Use `Add Variant` for another planned run, adjust dim/alpha/epochs/LR/seed, then dry-run it to inspect the exact command. Real training still requires explicit backend confirmation; the UI keeps this conservative by default.
 
-Dataset and project image lists use Windows-style natural ordering, so `image2.png` sorts before `image10.png`. LoRA outputs are listed newest-first, and each output row can be copied to the configured ComfyUI destination.
+Dataset and project image lists use Windows-style natural ordering, so `image2.png` sorts before `image10.png`. LoRA outputs are listed newest-first, and each output row can be copied to the configured ComfyUI destination. Selected output copies are restricted to `.safetensors` files inside the current project's `output/` folder.
 
 ## Commands
 
@@ -196,7 +236,7 @@ Dataset and project image lists use Windows-style natural ordering, so `image2.p
 - `dataset-report PROJECT_NAME`: summarize image size/counts, caption state, cache files, and outputs
 - `wizard [PROJECT_NAME]`: open a guided terminal menu for setup, import, reports, dry-runs, caching, and copy-to-Comfy
 - `create-caption-stubs PROJECT_NAME --trigger "...":` create or fill missing/empty captions
-- `generate-captions PROJECT_NAME`: generate missing/empty captions with a vision-language model in the captioning venv
+- `generate-captions PROJECT_NAME`: generate missing/empty captions with the configured vision-language backend; use `--force` to replace existing captions
 - `cache-latents PROJECT_NAME`: run `krea2_cache_latents.py`
 - `cache-text PROJECT_NAME`: run `krea2_cache_text_encoder_outputs.py`
 - `train PROJECT_NAME`: run the conservative Krea 2 RAW LoRA training command; accepts safe run/output names and common per-run overrides
@@ -211,7 +251,7 @@ Do not put model files, datasets, caches, outputs, or LoRA weights inside this r
 
 This helper does not support cloud training and does not train on Krea 2 Turbo. It uses the RAW model path for training and leaves Turbo use to ComfyUI inference.
 
-`download-models` skips existing non-empty Krea/Qwen target files unless `--force` is supplied. The VL caption model is downloaded to the normal Hugging Face cache through the configured captioning venv. Keep all configured destinations outside this repo.
+`download-models` skips existing non-empty Krea/Qwen target files unless `--force` is supplied. With the default `qwen_gguf` caption backend, the VL caption language model and vision projector are downloaded into `paths.caption_models_dir`. With `captioning.backend = "transformers"`, the VL caption model is downloaded to the normal Hugging Face cache through the configured captioning venv. Keep all configured destinations outside this repo.
 
 VL caption generation writes `.txt` sidecars next to project images. It does not store model files in this repo. Keep `captioning.local_files_only = true` or pass `--local-files-only` when you want to prevent Hugging Face downloads during captioning.
 

@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
+import ipaddress
 import json
 import mimetypes
 import os
@@ -21,6 +24,7 @@ import krea2_lora
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
 MAX_CAPTION_CHARS = 20_000
+MAX_POST_BYTES = 10 * 1024 * 1024
 DOWNLOAD_MODEL_CHOICES = {"all", "krea_raw", "qwen_vae", "qwen_text_encoder", "vl_caption"}
 TRAIN_OVERRIDE_ARGS = {
     "run_name": "--run-name",
@@ -54,6 +58,16 @@ def bool_value(payload: dict[str, object], key: str, default: bool = False) -> b
     return bool(value)
 
 
+def is_loopback_host(host: str) -> bool:
+    normalized = host.strip().strip("[]").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
 def build_cli_args(payload: dict[str, object], config: Path | None = None) -> list[str]:
     action = text_value(payload, "action")
     project = text_value(payload, "project")
@@ -73,6 +87,12 @@ def build_cli_args(payload: dict[str, object], config: Path | None = None) -> li
         caption_model = text_value(payload, "caption_model")
         if caption_model:
             args.extend(["--caption-model", caption_model])
+        caption_model_file = text_value(payload, "caption_model_file")
+        if caption_model_file:
+            args.extend(["--caption-model-file", caption_model_file])
+        caption_mmproj_file = text_value(payload, "caption_mmproj_file")
+        if caption_mmproj_file:
+            args.extend(["--caption-mmproj-file", caption_mmproj_file])
     elif action == "init-project":
         require_project(project)
         args.extend(["init-project", project])
@@ -103,9 +123,33 @@ def build_cli_args(payload: dict[str, object], config: Path | None = None) -> li
     elif action == "generate-captions":
         require_project(project)
         args.extend(["generate-captions", project])
+        caption_backend = text_value(payload, "caption_backend")
+        if caption_backend:
+            args.extend(["--backend", caption_backend])
         caption_model = text_value(payload, "caption_model")
         if caption_model:
             args.extend(["--model", caption_model])
+        caption_model_file = text_value(payload, "caption_model_file")
+        if caption_model_file:
+            args.extend(["--model-file", caption_model_file])
+        caption_mmproj_file = text_value(payload, "caption_mmproj_file")
+        if caption_mmproj_file:
+            args.extend(["--mmproj-file", caption_mmproj_file])
+        caption_llama_cli = text_value(payload, "caption_llama_cli")
+        if caption_llama_cli:
+            args.extend(["--llama-cli", caption_llama_cli])
+        caption_server_url = text_value(payload, "caption_server_url")
+        if caption_server_url:
+            args.extend(["--server-url", caption_server_url])
+        caption_prompt = text_value(payload, "caption_prompt")
+        if caption_prompt:
+            args.extend(["--prompt", caption_prompt])
+        caption_max_tokens = text_value(payload, "caption_max_tokens")
+        if caption_max_tokens:
+            args.extend(["--max-new-tokens", caption_max_tokens])
+        caption_gpu_layers = text_value(payload, "caption_gpu_layers")
+        if caption_gpu_layers:
+            args.extend(["--gpu-layers", caption_gpu_layers])
         trigger = text_value(payload, "trigger")
         if trigger:
             args.extend(["--trigger", trigger])
@@ -239,20 +283,39 @@ def model_inventory(config: krea2_lora.AppConfig) -> list[dict[str, object]]:
             }
         )
 
+    backend = krea2_lora.caption_backend(config)
     caption_model = str(config.captioning["model"])
-    cache_dir = hf_model_cache_dir(caption_model)
-    models.append(
-        {
-            "name": "vl_caption",
-            "label": "VL caption model",
-            "repo": caption_model,
-            "file": "Hugging Face snapshot cache",
-            "path": str(cache_dir),
-            "status": "installed" if hf_model_is_cached(caption_model) else "missing",
-            "size_bytes": None,
-            "download_action": "download-models",
-        }
-    )
+    if backend == "qwen_gguf":
+        specs = krea2_lora.caption_gguf_specs(config)
+        targets = [Path(spec["target"]) for spec in specs]
+        installed = all(target.is_file() for target in targets)
+        size_bytes = sum(target.stat().st_size for target in targets if target.is_file()) if installed else None
+        models.append(
+            {
+                "name": "vl_caption",
+                "label": "Qwen GGUF caption model",
+                "repo": caption_model,
+                "file": " + ".join(str(spec["file"]) for spec in specs),
+                "path": str(config.paths["caption_models_dir"]),
+                "status": "installed" if installed else "missing",
+                "size_bytes": size_bytes,
+                "download_action": "download-models",
+            }
+        )
+    else:
+        cache_dir = hf_model_cache_dir(caption_model)
+        models.append(
+            {
+                "name": "vl_caption",
+                "label": "VL caption model",
+                "repo": caption_model,
+                "file": "Hugging Face snapshot cache",
+                "path": str(cache_dir),
+                "status": "installed" if hf_model_is_cached(caption_model) else "missing",
+                "size_bytes": None,
+                "download_action": "download-models",
+            }
+        )
     return models
 
 
@@ -342,45 +405,49 @@ def regenerate_caption_payload(payload: dict[str, object], config_path: Path | N
     paths = krea2_lora.project_paths(config, project)
     image_path = safe_existing_project_image(config, project, image)
     caption_path = image_path.with_suffix(".txt")
-    python_bin = krea2_lora.captioning_python(config)
-    if not python_bin.is_file():
-        raise ValueError(f"Captioning venv python not found: {python_bin}")
 
     model = text_value(payload, "caption_model") or str(config.captioning["model"])
-    max_new_tokens = int(config.captioning["max_new_tokens"])
+    max_new_tokens_text = text_value(payload, "caption_max_tokens")
+    max_new_tokens = int(max_new_tokens_text) if max_new_tokens_text else int(config.captioning["max_new_tokens"])
     device = text_value(payload, "device", "auto")
     if device not in {"auto", "cpu", "cuda"}:
         raise ValueError("device must be auto, cpu, or cuda")
-    command = [
-        str(python_bin),
-        "-c",
-        krea2_lora.VLM_CAPTION_SCRIPT,
-        "--model",
-        model,
-        "--max-new-tokens",
-        str(max_new_tokens),
-        "--device",
-        device,
-    ]
     trigger = text_value(payload, "trigger")
-    if trigger:
-        command.extend(["--trigger", trigger])
-    if bool_value(payload, "caption_local_only", True):
-        command.append("--local-files-only")
-
-    completed = subprocess.run(
-        command,
-        input=json.dumps({"items": [{"image": str(image_path), "caption": str(caption_path)}]}),
-        text=True,
-        capture_output=True,
-        check=False,
+    local_files_only = bool_value(payload, "caption_local_only", True)
+    caption_args = argparse.Namespace(
+        backend=text_value(payload, "caption_backend") or None,
+        model=model,
+        model_file=text_value(payload, "caption_model_file") or None,
+        mmproj_file=text_value(payload, "caption_mmproj_file") or None,
+        trigger=trigger,
+        max_new_tokens=max_new_tokens,
+        device=device,
+        llama_cli=text_value(payload, "caption_llama_cli") or None,
+        server_url=text_value(payload, "caption_server_url") or None,
+        prompt=text_value(payload, "caption_prompt") or None,
+        gpu_layers=int(text_value(payload, "caption_gpu_layers")) if text_value(payload, "caption_gpu_layers") else None,
+        local_files_only=local_files_only,
     )
-    item = dataset_review_item(paths, image_path) if completed.returncode == 0 else None
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        returncode = krea2_lora.run_caption_backend(
+            config,
+            caption_args,
+            [{"image": str(image_path), "caption": str(caption_path)}],
+            0,
+            model,
+            max_new_tokens,
+            local_files_only,
+        )
+    item = dataset_review_item(paths, image_path) if returncode == 0 else None
+    backend = krea2_lora.caption_backend(config, caption_args.backend)
     return {
-        "args": ["regenerate-caption", project, image],
-        "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
+        "args": ["regenerate-caption", "--backend", backend, project, image],
+        "returncode": returncode,
+        "stdout": stdout.getvalue(),
+        "stderr": stderr.getvalue(),
         "item": item,
     }
 
@@ -410,6 +477,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             length = int(self.headers.get("Content-Length", "0"))
+            if length > MAX_POST_BYTES:
+                self.send_json({"error": "Request body is too large"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                return
             payload = json.loads(self.rfile.read(length) or b"{}")
             if parsed.path == "/api/run":
                 args = build_cli_args(payload, self.state.config)
@@ -517,11 +587,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8765, help="Bind port.")
     parser.add_argument("--config", type=Path, default=None, help="Optional config.toml path.")
     parser.add_argument("--open", action="store_true", help="Open the web app in the default browser.")
+    parser.add_argument("--unsafe-host", action="store_true", help="Allow binding to a non-loopback host.")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if not args.unsafe_host and not is_loopback_host(args.host):
+        print(
+            "error: refusing to bind outside localhost without --unsafe-host",
+            file=sys.stderr,
+        )
+        return 2
     Handler.state = WebState(args.config)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}/"

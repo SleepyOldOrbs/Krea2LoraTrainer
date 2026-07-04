@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import mimetypes
 import os
 import re
 import json
@@ -11,6 +13,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +28,8 @@ except ModuleNotFoundError:  # pragma: no cover - only hit on Python < 3.11
 IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 WINDOWS_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)")
 SAFE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+CAPTION_BACKENDS = {"qwen_gguf", "transformers"}
 VLM_CAPTION_SCRIPT = r"""
 import argparse
 import json
@@ -157,12 +163,54 @@ def main():
 if __name__ == "__main__":
     raise SystemExit(main())
 """
+HF_FILE_DOWNLOAD_SCRIPT = r"""
+import argparse
+import sys
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Download or verify a single Hugging Face repository file.")
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--filename", required=True)
+    parser.add_argument("--local-dir", required=True)
+    parser.add_argument("--force", action="store_true")
+    args = parser.parse_args()
+
+    try:
+        from huggingface_hub import hf_hub_download
+    except Exception as exc:
+        print(
+            "error: huggingface_hub is required to download caption GGUF files: "
+            f"{exc}",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        path = hf_hub_download(
+            repo_id=args.repo,
+            filename=args.filename,
+            local_dir=args.local_dir,
+            force_download=args.force,
+        )
+    except Exception as exc:
+        print(f"error: could not download {args.repo}/{args.filename}: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"[ok] hf_file: {path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
 
 DEFAULT_CONFIG: dict[str, dict[str, Any]] = {
     "paths": {
         "musubi_repo": "~/src/musubi-tuner",
         "musubi_venv": "~/.venvs/musubi-krea2",
         "captioning_venv": "~/.venvs/vl-caption",
+        "caption_models_dir": "~/ai_models/vl-caption/qwen2.5-vl-7b-captioner-relaxed-gguf",
         "projects_root": "~/krea2_loras",
         "krea_raw": "~/ai_models/krea2/raw.safetensors",
         "qwen_vae": "~/ai_models/qwen/split_files/vae/qwen_image_vae.safetensors",
@@ -199,8 +247,24 @@ DEFAULT_CONFIG: dict[str, dict[str, Any]] = {
         "qwen_text_encoder_file": "text_encoders/qwen3vl_4b_bf16.safetensors",
     },
     "captioning": {
-        "model": "Salesforce/blip-image-captioning-base",
-        "max_new_tokens": 64,
+        "backend": "qwen_gguf",
+        "model": "mradermacher/Qwen2.5-VL-7B-Captioner-Relaxed-GGUF",
+        "model_file": "Qwen2.5-VL-7B-Captioner-Relaxed.Q6_K.gguf",
+        "mmproj_file": "Qwen2.5-VL-7B-Captioner-Relaxed.mmproj-f16.gguf",
+        "llama_cli": "llama-qwen2vl-cli",
+        "server_url": "",
+        "prompt": (
+            "Write one concise but detailed image caption for training a visual style model. "
+            "Describe only visible content: subject, setting, medium, composition, lighting, colour palette, "
+            "mood, texture, camera or painting qualities, and notable details. "
+            "Do not use a title, label, or colon prefix. Do not mention AI, diffusion, LoRA, generated, "
+            "or an artist name unless it appears as visible text. "
+            "Return only the caption."
+        ),
+        "temperature": "0.2",
+        "top_p": "0.9",
+        "gpu_layers": 99,
+        "max_new_tokens": 180,
         "local_files_only": True,
     },
 }
@@ -363,6 +427,71 @@ def training_settings(config: AppConfig, overrides: dict[str, Any] | None = None
     if overrides:
         settings.update({key: value for key, value in overrides.items() if value is not None})
     return settings
+
+
+def caption_backend(config: AppConfig, override: str | None = None) -> str:
+    backend = (override or str(config.captioning.get("backend", "transformers"))).strip().lower()
+    aliases = {
+        "hf": "transformers",
+        "blip": "transformers",
+        "vl": "transformers",
+        "qwen": "qwen_gguf",
+        "gguf": "qwen_gguf",
+    }
+    backend = aliases.get(backend, backend)
+    if backend not in CAPTION_BACKENDS:
+        raise ValueError(f"caption backend must be one of: {', '.join(sorted(CAPTION_BACKENDS))}")
+    return backend
+
+
+def caption_model_id(config: AppConfig, override: str | None = None) -> str:
+    return (override or str(config.captioning["model"])).strip()
+
+
+def caption_gguf_model_file(config: AppConfig, override: str | None = None) -> str:
+    return (override or str(config.captioning["model_file"])).strip()
+
+
+def caption_gguf_mmproj_file(config: AppConfig, override: str | None = None) -> str:
+    return (override or str(config.captioning["mmproj_file"])).strip()
+
+
+def caption_gguf_paths(
+    config: AppConfig,
+    model_file_override: str | None = None,
+    mmproj_file_override: str | None = None,
+) -> tuple[Path, Path]:
+    model_dir = config.paths["caption_models_dir"]
+    return (
+        model_dir / caption_gguf_model_file(config, model_file_override),
+        model_dir / caption_gguf_mmproj_file(config, mmproj_file_override),
+    )
+
+
+def caption_gguf_specs(
+    config: AppConfig,
+    repo_override: str | None = None,
+    model_file_override: str | None = None,
+    mmproj_file_override: str | None = None,
+) -> list[dict[str, Any]]:
+    repo = caption_model_id(config, repo_override)
+    model_file = caption_gguf_model_file(config, model_file_override)
+    mmproj_file = caption_gguf_mmproj_file(config, mmproj_file_override)
+    model_path, mmproj_path = caption_gguf_paths(config, model_file, mmproj_file)
+    return [
+        {
+            "name": "vl_caption_model",
+            "repo": repo,
+            "file": model_file,
+            "target": model_path,
+        },
+        {
+            "name": "vl_caption_mmproj",
+            "repo": repo,
+            "file": mmproj_file,
+            "target": mmproj_path,
+        },
+    ]
 
 
 def local_dir_for_hf_file(target: Path, hf_file: str) -> Path:
@@ -687,13 +816,40 @@ def env_checks(config: AppConfig) -> list[CheckResult]:
     else:
         add("error", "musubi_repo", f"Missing directory: {musubi_repo}")
 
-    for key in ["musubi_venv", "captioning_venv"]:
+    try:
+        backend = caption_backend(config)
+        add("ok", "caption_backend", backend)
+    except ValueError as exc:
+        backend = "transformers"
+        add("error", "caption_backend", str(exc))
+
+    for key in ["musubi_venv"]:
         path = p[key]
         python_bin = path / "bin" / "python"
         if path.is_dir() and python_bin.is_file():
             add("ok", key, str(path))
         else:
             add("error", key, f"Expected venv with bin/python: {path}")
+
+    caption_venv = p["captioning_venv"]
+    caption_python = caption_venv / "bin" / "python"
+    if backend == "transformers":
+        if caption_venv.is_dir() and caption_python.is_file():
+            add("ok", "captioning_venv", str(caption_venv))
+        else:
+            add("error", "captioning_venv", f"Expected venv with bin/python: {caption_venv}")
+    elif caption_venv.is_dir() and caption_python.is_file():
+        add("ok", "captioning_venv", f"{caption_venv} (available for transformers fallback)")
+    else:
+        add("warn", "captioning_venv", f"Not needed for qwen_gguf backend: {caption_venv}")
+
+    if backend == "qwen_gguf":
+        model_path, mmproj_path = caption_gguf_paths(config)
+        add("ok" if model_path.is_file() else "warn", "vl_caption_model", str(model_path))
+        add("ok" if mmproj_path.is_file() else "warn", "vl_caption_mmproj", str(mmproj_path))
+        llama_cli = str(config.captioning.get("llama_cli", "llama-qwen2vl-cli"))
+        resolved = resolve_executable(llama_cli)
+        add("ok" if resolved else "warn", "llama_cli", resolved or f"Not found on PATH: {llama_cli}")
 
     for key in ["krea_raw", "qwen_vae", "qwen_text_encoder"]:
         path = p[key]
@@ -972,6 +1128,84 @@ def download_models(args: argparse.Namespace) -> int:
 
 
 def download_vl_caption_model(config: AppConfig, args: argparse.Namespace) -> int:
+    backend = caption_backend(config)
+    if backend == "qwen_gguf":
+        return download_vl_caption_gguf_model(config, args)
+    return download_vl_caption_transformers_model(config, args)
+
+
+def download_vl_caption_gguf_model(config: AppConfig, args: argparse.Namespace) -> int:
+    specs = caption_gguf_specs(
+        config,
+        args.caption_model,
+        getattr(args, "caption_model_file", None),
+        getattr(args, "caption_mmproj_file", None),
+    )
+    rc = 0
+    print("VL caption backend: qwen_gguf")
+    python_bin = captioning_python(config)
+    downloader_python = python_bin if python_bin.is_file() else Path(sys.executable)
+    for spec in specs:
+        target = Path(spec["target"])
+        exists = target.is_file() and target.stat().st_size > 0
+        size_mb = round(target.stat().st_size / 1024 / 1024, 2) if exists else 0
+        label = str(spec["name"])
+        if exists and not args.force:
+            print(f"[ok] {label}: {target} ({size_mb} MB), skipping existing file")
+            continue
+        if args.verify_only:
+            print(f"[missing] {label}: {target}")
+            rc = 1
+            continue
+        local_dir = local_dir_for_hf_file(target, str(spec["file"]))
+        command = [
+            str(downloader_python),
+            "-c",
+            HF_FILE_DOWNLOAD_SCRIPT,
+            "--repo",
+            str(spec["repo"]),
+            "--filename",
+            str(spec["file"]),
+            "--local-dir",
+            str(local_dir),
+        ]
+        if args.force:
+            command.append("--force")
+        print("Download command:")
+        display_command = [
+            str(downloader_python),
+            "-c",
+            "<hf file download helper>",
+            "--repo",
+            str(spec["repo"]),
+            "--filename",
+            str(spec["file"]),
+            "--local-dir",
+            str(local_dir),
+        ]
+        if args.force:
+            display_command.append("--force")
+        print(" ".join(quote(part) for part in display_command))
+        if args.dry_run:
+            print("Dry run: VL caption file was not downloaded.")
+            continue
+        local_dir.mkdir(parents=True, exist_ok=True)
+        completed = subprocess.run(command, text=True, capture_output=True, check=False)
+        if completed.stdout:
+            print(completed.stdout, end="")
+        if completed.stderr:
+            print(completed.stderr, end="", file=sys.stderr)
+        if completed.returncode:
+            rc = completed.returncode
+        elif target.is_file():
+            print(f"[ok] {label}: {target} ({round(target.stat().st_size / 1024 / 1024, 2)} MB)")
+        else:
+            print(f"[error] {label}: download command finished, but expected file is missing: {target}")
+            rc = 1
+    return rc
+
+
+def download_vl_caption_transformers_model(config: AppConfig, args: argparse.Namespace) -> int:
     model = args.caption_model or str(config.captioning["model"])
     python_bin = captioning_python(config)
     command = [
@@ -1065,28 +1299,101 @@ def caption_generation_targets(project: ProjectPaths, force: bool, limit: int | 
     return targets, skipped
 
 
-def generate_captions(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
-    project = project_paths(config, args.project_name)
-    if not project.images.is_dir():
-        print(f"Missing image directory: {project.images}")
-        return 1
+def clean_caption_text(value: object) -> str:
+    text = ANSI_RE.sub("", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text.strip(" .\"'“”")
 
-    images = list_images(project.images)
-    if not images:
-        print(f"No supported images found in {project.images}")
-        return 1
 
-    model = args.model or str(config.captioning["model"])
-    max_new_tokens = args.max_new_tokens or int(config.captioning["max_new_tokens"])
-    local_files_only = (
-        bool(config.captioning["local_files_only"]) if args.local_files_only is None else bool(args.local_files_only)
+def caption_with_trigger(text: str, trigger: str) -> str:
+    clean_trigger = clean_caption_text(trigger)
+    clean_text = clean_caption_text(text)
+    if clean_trigger and clean_text and clean_trigger.lower() not in clean_text.lower():
+        return f"{clean_trigger}, {clean_text}"
+    if clean_trigger and not clean_text:
+        return clean_trigger
+    return clean_text
+
+
+def extract_qwen_caption(stdout: str, prompt: str) -> str:
+    text = ANSI_RE.sub("", stdout or "")
+    if prompt and prompt in text:
+        text = text.split(prompt, 1)[-1]
+    skip_prefixes = (
+        "build:",
+        "clip_",
+        "common_",
+        "encode_",
+        "generate:",
+        "ggml_",
+        "llama_",
+        "load_",
+        "main:",
+        "sampling:",
+        "sampler",
+        "system_info:",
+        "mtmd_",
+        "warn:",
+        "usage:",
+        "for normal use",
+        "this is an experimental cli",
+        "you are a helpful assistant",
     )
-    targets, skipped = caption_generation_targets(project, args.force, args.limit)
-    if not targets:
-        print(f"No captions need generation. Skipped {skipped} existing non-empty captions.")
-        return 0
+    lines: list[str] = []
+    skip_template = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        line = re.sub(r"^\d+\.\d+\.\d+\.\d+\s+[A-Z]\s+", "", line).strip()
+        if not line:
+            skip_template = False
+            continue
+        lower = line.lower()
+        if "chat template example:" in lower:
+            skip_template = True
+            continue
+        if skip_template or lower.startswith(("<|im_start|>", "<|im_end|>")):
+            continue
+        if lower.startswith(skip_prefixes):
+            continue
+        line = re.sub(r"^(assistant|caption)\s*[:：]\s*", "", line, flags=re.IGNORECASE)
+        lines.append(line)
+    return clean_caption_text(" ".join(lines))
 
+
+def resolve_executable(command: str) -> str | None:
+    value = command.strip()
+    if not value:
+        return None
+    candidate = expand_path(value)
+    if candidate.is_absolute() or "/" in value or "\\" in value:
+        return str(candidate) if candidate.is_file() else None
+    return shutil.which(value)
+
+
+def print_caption_plan(
+    backend: str,
+    model: str,
+    targets: list[dict[str, str]],
+    skipped: int,
+    local_files_only: bool,
+) -> None:
+    print(f"Caption backend: {backend}")
+    print(f"Caption model: {model}")
+    print(f"Caption targets: {len(targets)} images. Skipped {skipped} existing non-empty captions.")
+    if local_files_only:
+        print("Local cache only: enabled. No Hugging Face downloads will be attempted.")
+    else:
+        print("Local cache only: disabled. Missing configured caption files may be downloaded first.")
+
+
+def run_transformers_caption_backend(
+    config: AppConfig,
+    args: argparse.Namespace,
+    targets: list[dict[str, str]],
+    model: str,
+    max_new_tokens: int,
+    local_files_only: bool,
+) -> int:
     python_bin = captioning_python(config)
     if not python_bin.is_file():
         print(f"Captioning venv python not found: {python_bin}")
@@ -1108,20 +1415,6 @@ def generate_captions(args: argparse.Namespace) -> int:
     if local_files_only:
         command.append("--local-files-only")
 
-    print(f"Caption model: {model}")
-    print(f"Caption targets: {len(targets)} images. Skipped {skipped} existing non-empty captions.")
-    if local_files_only:
-        print("Local cache only: enabled. No Hugging Face downloads will be attempted.")
-    else:
-        print("Local cache only: disabled. Transformers may download the caption model into the HF cache.")
-    if args.dry_run:
-        for item in targets[:10]:
-            print(f"would caption: {item['image']} -> {item['caption']}")
-        if len(targets) > 10:
-            print(f"...and {len(targets) - 10} more")
-        print("Dry run: captions were not generated.")
-        return 0
-
     completed = subprocess.run(
         command,
         input=json.dumps({"items": targets}),
@@ -1133,10 +1426,262 @@ def generate_captions(args: argparse.Namespace) -> int:
         print(completed.stdout, end="")
     if completed.stderr:
         print(completed.stderr, end="", file=sys.stderr)
-    if completed.returncode:
-        return completed.returncode
+    return completed.returncode
+
+
+def run_qwen_gguf_caption_backend(
+    config: AppConfig,
+    args: argparse.Namespace,
+    targets: list[dict[str, str]],
+    model: str,
+    max_new_tokens: int,
+    local_files_only: bool,
+) -> int:
+    server_url = (getattr(args, "server_url", "") or str(config.captioning.get("server_url", ""))).strip()
+    if server_url:
+        return run_qwen_server_caption_backend(config, args, targets, model, max_new_tokens, server_url)
+
+    model_file = getattr(args, "model_file", None)
+    mmproj_file = getattr(args, "mmproj_file", None)
+    model_path, mmproj_path = caption_gguf_paths(config, model_file, mmproj_file)
+    missing = [path for path in [model_path, mmproj_path] if not path.is_file()]
+    if missing and not local_files_only:
+        download_args = argparse.Namespace(
+            caption_model=model,
+            caption_model_file=model_file,
+            caption_mmproj_file=mmproj_file,
+            verify_only=False,
+            force=False,
+            dry_run=False,
+        )
+        rc = download_vl_caption_gguf_model(config, download_args)
+        if rc:
+            return rc
+        missing = [path for path in [model_path, mmproj_path] if not path.is_file()]
+    if missing:
+        print("Missing Qwen GGUF caption files:")
+        for path in missing:
+            print(f"  {path}")
+        print("Run: python krea2_lora.py download-models --model vl_caption")
+        return 1
+
+    llama_cli = getattr(args, "llama_cli", "") or str(config.captioning.get("llama_cli", "llama-qwen2vl-cli"))
+    executable = resolve_executable(llama_cli)
+    if executable is None:
+        print(f"Qwen GGUF caption executable not found: {llama_cli}")
+        print("Install a Qwen-VL capable llama.cpp/KoboldCPP build, or set captioning.llama_cli in config.toml.")
+        return 1
+
+    prompt = (
+        getattr(args, "prompt", "")
+        or str(config.captioning.get("prompt", "Describe this image for diffusion LoRA training."))
+    ).strip()
+    temperature = str(config.captioning.get("temperature", "")).strip()
+    top_p = str(config.captioning.get("top_p", "")).strip()
+    gpu_layers = getattr(args, "gpu_layers", None)
+    if gpu_layers is None:
+        gpu_layers = config.captioning.get("gpu_layers", "")
+    gpu_layers_text = str(gpu_layers).strip()
+
+    print(f"Qwen GGUF file: {model_path.name}")
+    print(f"Qwen mmproj file: {mmproj_path.name}")
+    print(f"Qwen executable: {executable}")
+    if gpu_layers_text:
+        print(f"Qwen GPU layers: {gpu_layers_text}")
+
+    written = 0
+    for item in targets:
+        image_path = Path(item["image"])
+        caption_path = Path(item["caption"])
+        command = [
+            executable,
+            "-m",
+            str(model_path),
+            "--mmproj",
+            str(mmproj_path),
+            "-p",
+            prompt,
+            "--image",
+            str(image_path),
+            "-n",
+            str(max_new_tokens),
+            "--no-perf",
+        ]
+        if temperature:
+            command.extend(["--temp", temperature])
+        if top_p:
+            command.extend(["--top-p", top_p])
+        if gpu_layers_text:
+            command.extend(["-ngl", gpu_layers_text])
+
+        completed = subprocess.run(command, text=True, capture_output=True, check=False)
+        if completed.stderr:
+            print(completed.stderr, end="", file=sys.stderr)
+        if completed.returncode:
+            print(f"error: failed to caption {image_path}", file=sys.stderr)
+            return completed.returncode
+
+        text = caption_with_trigger(extract_qwen_caption(completed.stdout, prompt), args.trigger)
+        if not text:
+            print(f"error: model returned an empty caption for {image_path}", file=sys.stderr)
+            return 1
+
+        caption_path.write_text(text + "\n", encoding="utf-8", newline="\n")
+        written += 1
+        print(f"captioned: {image_path.name} -> {caption_path.name}")
+
+    print(f"VL caption generation wrote {written} captions.")
+    return 0
+
+
+def qwen_server_caption_payload(
+    image_path: Path,
+    prompt: str,
+    max_new_tokens: int,
+    temperature: str,
+    top_p: str,
+) -> dict[str, Any]:
+    mime = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
+    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    payload: dict[str, Any] = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}},
+                ],
+            }
+        ],
+        "max_tokens": max_new_tokens,
+    }
+    if temperature:
+        payload["temperature"] = float(temperature)
+    if top_p:
+        payload["top_p"] = float(top_p)
+    return payload
+
+
+def run_qwen_server_caption_backend(
+    config: AppConfig,
+    args: argparse.Namespace,
+    targets: list[dict[str, str]],
+    model: str,
+    max_new_tokens: int,
+    server_url: str,
+) -> int:
+    prompt = (
+        getattr(args, "prompt", "")
+        or str(config.captioning.get("prompt", "Describe this image for diffusion LoRA training."))
+    ).strip()
+    temperature = str(config.captioning.get("temperature", "")).strip()
+    top_p = str(config.captioning.get("top_p", "")).strip()
+    endpoint = f"{server_url.rstrip('/')}/v1/chat/completions"
+
+    print(f"Qwen server URL: {server_url.rstrip('/')}")
+    print(f"Qwen server model: {model}")
+    written = 0
+    for item in targets:
+        image_path = Path(item["image"])
+        caption_path = Path(item["caption"])
+        payload = qwen_server_caption_payload(image_path, prompt, max_new_tokens, temperature, top_p)
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=300) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            print(f"error: Qwen server rejected {image_path}: HTTP {exc.code}: {body}", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            print(f"error: Qwen server request failed for {image_path}: {exc}", file=sys.stderr)
+            return 1
+
+        try:
+            raw_text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            print(f"error: Qwen server returned an unexpected response for {image_path}: {exc}", file=sys.stderr)
+            return 1
+
+        text = caption_with_trigger(raw_text, args.trigger)
+        if not text:
+            print(f"error: model returned an empty caption for {image_path}", file=sys.stderr)
+            return 1
+        caption_path.write_text(text + "\n", encoding="utf-8", newline="\n")
+        written += 1
+        print(f"captioned: {image_path.name} -> {caption_path.name}")
+
+    print(f"VL caption generation wrote {written} captions.")
+    return 0
+
+
+def run_caption_backend(
+    config: AppConfig,
+    args: argparse.Namespace,
+    targets: list[dict[str, str]],
+    skipped: int,
+    model: str,
+    max_new_tokens: int,
+    local_files_only: bool,
+) -> int:
+    try:
+        backend = caption_backend(config, getattr(args, "backend", None))
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
+
+    print_caption_plan(backend, model, targets, skipped, local_files_only)
+    if backend == "transformers":
+        rc = run_transformers_caption_backend(config, args, targets, model, max_new_tokens, local_files_only)
+    else:
+        rc = run_qwen_gguf_caption_backend(config, args, targets, model, max_new_tokens, local_files_only)
+    if rc:
+        return rc
     print(f"Generated {len(targets)} captions. Skipped {skipped} existing non-empty captions.")
     return 0
+
+
+def generate_captions(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    project = project_paths(config, args.project_name)
+    if not project.images.is_dir():
+        print(f"Missing image directory: {project.images}")
+        return 1
+
+    images = list_images(project.images)
+    if not images:
+        print(f"No supported images found in {project.images}")
+        return 1
+
+    model = caption_model_id(config, args.model)
+    max_new_tokens = args.max_new_tokens or int(config.captioning["max_new_tokens"])
+    local_files_only = (
+        bool(config.captioning["local_files_only"]) if args.local_files_only is None else bool(args.local_files_only)
+    )
+    targets, skipped = caption_generation_targets(project, args.force, args.limit)
+    if not targets:
+        print(f"No captions need generation. Skipped {skipped} existing non-empty captions.")
+        return 0
+
+    try:
+        backend = caption_backend(config, args.backend)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
+    if args.dry_run:
+        print_caption_plan(backend, model, targets, skipped, local_files_only)
+        for item in targets[:10]:
+            print(f"would caption: {item['image']} -> {item['caption']}")
+        if len(targets) > 10:
+            print(f"...and {len(targets) - 10} more")
+        print("Dry run: captions were not generated.")
+        return 0
+
+    return run_caption_backend(config, args, targets, skipped, model, max_new_tokens, local_files_only)
 
 
 def import_images(args: argparse.Namespace) -> int:
@@ -1155,10 +1700,11 @@ def import_images(args: argparse.Namespace) -> int:
     imported = 0
     skipped = 0
     for source in images:
-        dest = project.images / source.name
+        dest = project.images / source.relative_to(source_dir)
         if dest.exists() and not args.force:
             skipped += 1
         else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
             if dest.exists() or dest.is_symlink():
                 dest.unlink()
             if args.mode == "copy":
@@ -1267,12 +1813,19 @@ def wizard(args: argparse.Namespace) -> int:
                 argparse.Namespace(
                     config=args.config,
                     project_name=project_name,
+                    backend=None,
                     model=None,
+                    model_file=None,
+                    mmproj_file=None,
                     trigger=trigger,
                     force=False,
                     limit=None,
                     max_new_tokens=None,
                     device="auto",
+                    llama_cli=None,
+                    server_url=None,
+                    prompt=None,
+                    gpu_layers=None,
                     local_files_only=None,
                     dry_run=False,
                 )
@@ -1369,17 +1922,27 @@ def copy_to_comfy(args: argparse.Namespace) -> int:
     if source is None:
         print(f"No .safetensors LoRA output found in {project.output}")
         return 1
+    if source.suffix.lower() != ".safetensors":
+        print(f"Source file must be a .safetensors LoRA output: {source}")
+        return 1
     if not source.is_file():
         print(f"Source file does not exist: {source}")
         return 1
+    resolved_source = source.resolve()
+    output_root = project.output.resolve()
+    try:
+        resolved_source.relative_to(output_root)
+    except ValueError:
+        print(f"Source file must be inside this project's output folder: {project.output}")
+        return 1
     dest_dir = config.paths["comfy_lora_dir"]
-    dest = dest_dir / source.name
-    print(f"Copy: {source} -> {dest}")
+    dest = dest_dir / resolved_source.name
+    print(f"Copy: {resolved_source} -> {dest}")
     if args.dry_run:
         print("Dry run: file was not copied.")
         return 0
     dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, dest)
+    shutil.copy2(resolved_source, dest)
     print(f"Copied: {dest}")
     return 0
 
@@ -1426,6 +1989,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="all",
     )
     downloads.add_argument("--caption-model", help="VL caption Hugging Face model. Defaults to config.captioning.model.")
+    downloads.add_argument(
+        "--caption-model-file",
+        help="Qwen GGUF language-model filename. Defaults to config.captioning.model_file.",
+    )
+    downloads.add_argument(
+        "--caption-mmproj-file",
+        help="Qwen GGUF vision-projector filename. Defaults to config.captioning.mmproj_file.",
+    )
     downloads.add_argument("--force", action="store_true", help="Download even when the target file already exists.")
     downloads.add_argument("--dry-run", action="store_true", help="Print download commands without running them.")
     downloads.add_argument("--verify-only", action="store_true", help="Only verify local files; do not call Hugging Face.")
@@ -1472,12 +2043,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     vl_captions = sub.add_parser("generate-captions", help="Generate missing/empty captions with a VL model.")
     vl_captions.add_argument("project_name")
-    vl_captions.add_argument("--model", help="Hugging Face image-to-text model. Defaults to config.captioning.model.")
+    vl_captions.add_argument("--backend", choices=sorted(CAPTION_BACKENDS), help="Caption backend. Defaults to config.")
+    vl_captions.add_argument("--model", help="Caption model repo/id. Defaults to config.captioning.model.")
+    vl_captions.add_argument("--model-file", help="Qwen GGUF language-model filename. Defaults to config.")
+    vl_captions.add_argument("--mmproj-file", help="Qwen GGUF vision-projector filename. Defaults to config.")
     vl_captions.add_argument("--trigger", default="", help="Optional LoRA trigger phrase to prefix generated captions.")
     vl_captions.add_argument("--force", action="store_true", help="Overwrite existing non-empty captions.")
     vl_captions.add_argument("--limit", type=int, help="Maximum number of images to caption in this run.")
     vl_captions.add_argument("--max-new-tokens", type=int, help="Maximum caption tokens. Defaults to config.")
     vl_captions.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    vl_captions.add_argument("--llama-cli", help="Qwen GGUF executable override. Defaults to config.captioning.llama_cli.")
+    vl_captions.add_argument("--server-url", help="Use a running llama.cpp server instead of spawning a CLI per image.")
+    vl_captions.add_argument("--prompt", help="Qwen GGUF caption prompt override. Defaults to config.captioning.prompt.")
+    vl_captions.add_argument("--gpu-layers", type=int, help="Qwen GGUF layers to offload to GPU. Defaults to config.")
     vl_captions.add_argument(
         "--local-files-only",
         dest="local_files_only",
@@ -1489,7 +2067,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-downloads",
         dest="local_files_only",
         action="store_false",
-        help="Allow transformers to download the caption model into the Hugging Face cache.",
+        help="Allow the selected caption backend to download missing configured model files.",
     )
     vl_captions.add_argument("--dry-run", action="store_true", help="Show planned caption targets without running the VLM.")
     vl_captions.set_defaults(func=generate_captions)

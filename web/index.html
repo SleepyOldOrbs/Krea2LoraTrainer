@@ -93,9 +93,52 @@
           </div>
           <div class="caption-controls" id="captions">
             <div class="field">
-              <label for="captionModel">VL Caption Model</label>
-              <input id="captionModel" value="Salesforce/blip-image-captioning-base" autocomplete="off">
-              <p class="field-help">Runs from the configured captioning venv and writes matching .txt captions.</p>
+              <label for="captionBackend">Caption Backend</label>
+              <select id="captionBackend">
+                <option value="qwen_gguf">Qwen GGUF</option>
+                <option value="transformers">Transformers</option>
+              </select>
+              <p class="field-help">Qwen GGUF is the quality default for local LoRA training captions.</p>
+            </div>
+            <div class="field">
+              <label for="captionModel">Caption Model Repo</label>
+              <input id="captionModel" value="mradermacher/Qwen2.5-VL-7B-Captioner-Relaxed-GGUF" autocomplete="off">
+              <p class="field-help">Writes matching .txt captions; Qwen GGUF also uses the configured model and mmproj files.</p>
+            </div>
+            <div class="field">
+              <label for="captionModelFile">GGUF Model File</label>
+              <input id="captionModelFile" value="Qwen2.5-VL-7B-Captioner-Relaxed.Q6_K.gguf" autocomplete="off">
+              <p class="field-help">Q6_K is the quality default for 16 GB VRAM without crowding the card.</p>
+            </div>
+            <div class="field">
+              <label for="captionMmprojFile">Vision Projector</label>
+              <input id="captionMmprojFile" value="Qwen2.5-VL-7B-Captioner-Relaxed.mmproj-f16.gguf" autocomplete="off">
+              <p class="field-help">Keep the f16 projector for better visual detail.</p>
+            </div>
+            <div class="field">
+              <label for="captionLlamaCli">Qwen Runtime</label>
+              <input id="captionLlamaCli" value="llama-qwen2vl-cli" autocomplete="off">
+              <p class="field-help">Executable name or full path for the local Qwen-VL GGUF runner.</p>
+            </div>
+            <div class="field">
+              <label for="captionServerUrl">Qwen Server URL</label>
+              <input id="captionServerUrl" placeholder="http://172.22.112.1:8100" autocomplete="off">
+              <p class="field-help">Use a loaded llama.cpp server for faster batch captions.</p>
+            </div>
+            <div class="field">
+              <label for="captionMaxTokens">Caption Tokens</label>
+              <input id="captionMaxTokens" value="180" inputmode="numeric" autocomplete="off">
+              <p class="field-help">Higher values allow detail; captions are still prompted to stay concise.</p>
+            </div>
+            <div class="field">
+              <label for="captionGpuLayers">GPU Layers</label>
+              <input id="captionGpuLayers" value="99" inputmode="numeric" autocomplete="off">
+              <p class="field-help">Use full offload on GPU builds; CPU builds ignore the hardware benefit.</p>
+            </div>
+            <div class="field full">
+              <label for="captionPrompt">Caption Prompt</label>
+              <textarea id="captionPrompt" rows="3" autocomplete="off">Write one concise but detailed image caption for training a visual style model. Describe only visible content: subject, setting, medium, composition, lighting, colour palette, mood, texture, camera or painting qualities, and notable details. Do not use a title, label, or colon prefix. Do not mention AI, diffusion, LoRA, generated, or an artist name unless it appears as visible text. Return only the caption.</textarea>
+              <p class="field-help">Used by Qwen GGUF for both batch captions and single-image regeneration.</p>
             </div>
             <label class="check-control" for="captionLocalOnly">
               <input id="captionLocalOnly" type="checkbox" checked>
@@ -137,7 +180,7 @@
               </button>
               <button class="workflow-button" data-action="generate-captions">
                 <span class="step-number">5</span>
-                <span class="button-copy"><span class="button-title">Generate VL Captions</span><span class="button-note">Use the captioning venv and VL model to create missing captions.</span></span>
+                <span class="button-copy"><span class="button-title">Generate VL Captions</span><span class="button-note">Use the selected caption backend to create missing captions.</span></span>
                 <span class="run-state" aria-hidden="true">✓</span>
               </button>
               <button class="workflow-button" data-action="dataset-report">

@@ -44,7 +44,15 @@ function values() {
     source_dir: $("sourceDir").value.trim(),
     trigger: $("trigger").value.trim(),
     mode: $("mode").value,
+    caption_backend: $("captionBackend").value,
     caption_model: $("captionModel").value.trim(),
+    caption_model_file: $("captionModelFile").value.trim(),
+    caption_mmproj_file: $("captionMmprojFile").value.trim(),
+    caption_llama_cli: $("captionLlamaCli").value.trim(),
+    caption_server_url: $("captionServerUrl").value.trim(),
+    caption_max_tokens: $("captionMaxTokens").value.trim(),
+    caption_gpu_layers: $("captionGpuLayers").value.trim(),
+    caption_prompt: $("captionPrompt").value.trim(),
     caption_local_only: $("captionLocalOnly").checked,
     force_caption: $("overwriteCaptions").checked,
   };
@@ -156,7 +164,15 @@ function renderConfig(config) {
     projectInput.value = config.projects[0];
   }
   if (!state.captionDefaultsLoaded && config.captioning) {
+    $("captionBackend").value = config.captioning.backend || "qwen_gguf";
     $("captionModel").value = config.captioning.model || $("captionModel").value;
+    $("captionModelFile").value = config.captioning.model_file || $("captionModelFile").value;
+    $("captionMmprojFile").value = config.captioning.mmproj_file || $("captionMmprojFile").value;
+    $("captionLlamaCli").value = config.captioning.llama_cli || $("captionLlamaCli").value;
+    $("captionServerUrl").value = config.captioning.server_url || $("captionServerUrl").value;
+    $("captionMaxTokens").value = config.captioning.max_new_tokens || $("captionMaxTokens").value;
+    $("captionGpuLayers").value = config.captioning.gpu_layers ?? $("captionGpuLayers").value;
+    $("captionPrompt").value = config.captioning.prompt || $("captionPrompt").value;
     $("captionLocalOnly").checked = config.captioning.local_files_only !== false;
     state.captionDefaultsLoaded = true;
   }

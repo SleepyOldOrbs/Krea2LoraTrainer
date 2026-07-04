@@ -25,7 +25,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -261,10 +262,14 @@ h3 {
 .caption-controls {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) auto auto;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 14px;
-  align-items: center;
+  align-items: start;
   padding-top: 2px;
+}
+
+.field.full {
+  grid-column: 1 / -1;
 }
 
 .check-control {
@@ -286,14 +291,26 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   min-width: 0;
-  height: 40px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 0 11px;
   color: var(--text);
   background: #fff;
+}
+
+input,
+select {
+  height: 40px;
+  padding: 0 11px;
+}
+
+textarea {
+  min-height: 86px;
+  padding: 10px 11px;
+  line-height: 1.35;
+  resize: vertical;
 }
 
 input[type="checkbox"] {

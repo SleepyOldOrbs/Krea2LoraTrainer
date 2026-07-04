@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import krea2_lora
 import web_app
@@ -58,9 +59,22 @@ class WebAppTests(unittest.TestCase):
             {
                 "action": "download-models",
                 "caption_model": "Salesforce/blip-image-captioning-base",
+                "caption_model_file": "caption.Q6_K.gguf",
+                "caption_mmproj_file": "caption.mmproj-f16.gguf",
             }
         )
-        self.assertEqual(args[-3:], ["download-models", "--caption-model", "Salesforce/blip-image-captioning-base"])
+        self.assertEqual(
+            args[-7:],
+            [
+                "download-models",
+                "--caption-model",
+                "Salesforce/blip-image-captioning-base",
+                "--caption-model-file",
+                "caption.Q6_K.gguf",
+                "--caption-mmproj-file",
+                "caption.mmproj-f16.gguf",
+            ],
+        )
 
     def test_download_models_can_target_one_model(self) -> None:
         args = web_app.build_cli_args({"action": "download-models", "model": "qwen_vae"})
@@ -88,16 +102,37 @@ class WebAppTests(unittest.TestCase):
                 "project": "demo",
                 "trigger": "jagmoon style",
                 "caption_model": "Salesforce/blip-image-captioning-base",
+                "caption_model_file": "caption.Q6_K.gguf",
+                "caption_mmproj_file": "caption.mmproj-f16.gguf",
+                "caption_llama_cli": "/opt/llama/llama-qwen2vl-cli",
+                "caption_server_url": "http://172.22.112.1:8100",
+                "caption_prompt": "Describe this image for LoRA training.",
+                "caption_max_tokens": "180",
+                "caption_gpu_layers": "99",
                 "caption_local_only": True,
             }
         )
         self.assertEqual(
-            args[-7:],
+            args[-21:],
             [
                 "generate-captions",
                 "demo",
                 "--model",
                 "Salesforce/blip-image-captioning-base",
+                "--model-file",
+                "caption.Q6_K.gguf",
+                "--mmproj-file",
+                "caption.mmproj-f16.gguf",
+                "--llama-cli",
+                "/opt/llama/llama-qwen2vl-cli",
+                "--server-url",
+                "http://172.22.112.1:8100",
+                "--prompt",
+                "Describe this image for LoRA training.",
+                "--max-new-tokens",
+                "180",
+                "--gpu-layers",
+                "99",
                 "--trigger",
                 "jagmoon style",
                 "--local-files-only",
@@ -114,6 +149,29 @@ class WebAppTests(unittest.TestCase):
         )
         self.assertIn("--allow-downloads", args)
         self.assertNotIn("--local-files-only", args)
+
+    def test_generate_captions_passes_backend_selection(self) -> None:
+        args = web_app.build_cli_args(
+            {
+                "action": "generate-captions",
+                "project": "demo",
+                "caption_backend": "qwen_gguf",
+            }
+        )
+        self.assertIn("--backend", args)
+        self.assertIn("qwen_gguf", args)
+
+    def test_rejects_non_loopback_host_without_explicit_unsafe_flag(self) -> None:
+        with mock.patch.object(web_app, "ThreadingHTTPServer") as server:
+            self.assertEqual(web_app.main(["--host", "0.0.0.0", "--port", "8765"]), 2)
+
+        server.assert_not_called()
+
+    def test_loopback_host_check_accepts_localhost_and_loopback_ips(self) -> None:
+        self.assertTrue(web_app.is_loopback_host("localhost"))
+        self.assertTrue(web_app.is_loopback_host("127.0.0.1"))
+        self.assertTrue(web_app.is_loopback_host("::1"))
+        self.assertFalse(web_app.is_loopback_host("0.0.0.0"))
 
     def test_copy_to_comfy_accepts_selected_output_file(self) -> None:
         args = web_app.build_cli_args(

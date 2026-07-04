@@ -2,6 +2,7 @@
 musubi_repo = "~/src/musubi-tuner"
 musubi_venv = "~/.venvs/musubi-krea2"
 captioning_venv = "~/.venvs/vl-caption"
+caption_models_dir = "~/ai_models/vl-caption/qwen2.5-vl-7b-captioner-relaxed-gguf"
 projects_root = "~/krea2_loras"
 krea_raw = "~/ai_models/krea2/raw.safetensors"
 qwen_vae = "~/ai_models/qwen/split_files/vae/qwen_image_vae.safetensors"
@@ -38,6 +39,15 @@ qwen_text_encoder_repo = "Comfy-Org/Qwen3-VL"
 qwen_text_encoder_file = "text_encoders/qwen3vl_4b_bf16.safetensors"
 
 [captioning]
-model = "Salesforce/blip-image-captioning-base"
-max_new_tokens = 64
+backend = "qwen_gguf"
+model = "mradermacher/Qwen2.5-VL-7B-Captioner-Relaxed-GGUF"
+model_file = "Qwen2.5-VL-7B-Captioner-Relaxed.Q6_K.gguf"
+mmproj_file = "Qwen2.5-VL-7B-Captioner-Relaxed.mmproj-f16.gguf"
+llama_cli = "llama-qwen2vl-cli"
+server_url = ""
+prompt = "Write one concise but detailed image caption for training a visual style model. Describe only visible content: subject, setting, medium, composition, lighting, colour palette, mood, texture, camera or painting qualities, and notable details. Do not use a title, label, or colon prefix. Do not mention AI, diffusion, LoRA, generated, or an artist name unless it appears as visible text. Return only the caption."
+temperature = "0.2"
+top_p = "0.9"
+gpu_layers = 99
+max_new_tokens = 180
 local_files_only = true
